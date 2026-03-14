@@ -1,0 +1,21 @@
+{
+  "name": "hyperinflation-monorepo",
+  "version": "1.0.0",
+  "description": "A modular world simulation with AI agents.",
+  "scripts": {
+    "install:all": "npm run install:backend && npm run install:frontend && npm run install:ai",
+    "install:backend": "cd netty && gradle build",
+    "install:frontend": "cd flutter && flutter pub get",
+    "install:ai": "cd python && pip install -r requirements.txt",
+
+    "dev": "start \"PYTHON\" cmd /k \"npm run dev:ai\" && start \"NETTY\" cmd /k \"npm run dev:backend\" && start \"FLUTTER\" cmd /k \"npm run dev:frontend\"",
+
+    "dev:ai": "cd python && python ai_service.py",
+    "dev:backend": "cd netty && gradle run",
+    "dev:frontend": "cd flutter && flutter run -d windows",
+
+    "clean": "npm run clean:backend && npm run clean:frontend",
+    "clean:backend": "cd netty && ./gradlew clean",
+    "clean:frontend": "cd flutter && flutter clean"
+  }
+}
