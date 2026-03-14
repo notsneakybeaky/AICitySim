@@ -2,21 +2,21 @@ import 'package:flutter/material.dart';
 import 'dashboard.dart';
 
 void main() {
-  runApp(const SwarmApp());
+  runApp(const HyperinflationApp());
 }
 
-class SwarmApp extends StatelessWidget {
-  const SwarmApp({super.key});
+class HyperinflationApp extends StatelessWidget {
+  const HyperinflationApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Swarm Policy Engine',
+      title: 'Hyperinflation',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0A0E12),
       ),
-      home: SwarmDashboard(),
+      home: const WorldDashboard(),
     );
   }
 }

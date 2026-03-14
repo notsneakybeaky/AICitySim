@@ -1,92 +1,116 @@
 import 'package:flutter/material.dart';
 import 'models.dart';
-import 'market_service.dart';
+import 'world_service.dart';
 
-class SwarmDashboard extends StatefulWidget {
+class WorldDashboard extends StatefulWidget {
+  const WorldDashboard({super.key});
+
   @override
-  State<SwarmDashboard> createState() => _SwarmDashboardState();
+  State<WorldDashboard> createState() => _WorldDashboardState();
 }
 
-class _SwarmDashboardState extends State<SwarmDashboard> {
-  final MarketService _market = MarketService();
+class _WorldDashboardState extends State<WorldDashboard> {
+  final WorldService _ws = WorldService();
 
   // ---- Accumulated state ----
-  int _round = 0;
+  int _tick = 0;
   String _phase = 'CONNECTING';
-  MarketRegime _regime = MarketRegime();
-  List<Proposal> _proposals = [];
-  String? _winnerAgent;
-  Proposal? _winningPolicy;
-  List<RoundResult> _history = [];
+  String? _clientId;
+  List<String> _activeModules = [];
+  Map<String, City> _cities = {};
+  EconomyState _economy = EconomyState();
+  List<EventEntry> _events = [];
   List<double> _priceHistory = [];
+  bool _connected = false;
 
   @override
   void initState() {
     super.initState();
-    _market.connect().listen(_onMessage);
+    _ws.connect().listen(_onPacket, onError: (_) {
+      setState(() {
+        _phase = 'DISCONNECTED';
+        _connected = false;
+      });
+    });
   }
 
   @override
   void dispose() {
-    _market.dispose();
+    _ws.dispose();
     super.dispose();
   }
 
-  void _onMessage(Map<String, dynamic> data) {
-    final type = data['type'] as String? ?? '';
-
+  void _onPacket(ServerPacket pkt) {
     setState(() {
-      // Always update round if present
-      if (data.containsKey('round')) {
-        _round = data['round'];
-      }
+      switch (pkt.pid) {
+      // ---- Handshake Ack ----
+        case S2C.handshakeAck:
+          _clientId = pkt.data['client_id'];
+          _tick = pkt.data['current_tick'] ?? 0;
+          _activeModules = List<String>.from(pkt.data['active_modules'] ?? []);
+          _phase = pkt.data['state'] ?? 'SPECTATE';
+          _connected = true;
 
-      // Always update regime if present
-      if (data.containsKey('regime')) {
-        _regime = MarketRegime.fromJson(data['regime']);
-      }
-
-      switch (type) {
-        case 'MARKET_STATE':
-          _phase = data['phase'] ?? 'IDLE';
-          break;
-
-        case 'PHASE_CHANGE':
-          _phase = data['phase'] ?? _phase;
-          // When a new round starts proposing, clear old proposals
-          if (_phase == 'PROPOSING') {
-            _proposals = [];
-            _winnerAgent = null;
-            _winningPolicy = null;
+      // ---- World Snapshot (initial state) ----
+        case S2C.worldSnapshot:
+          _tick = pkt.data['tick'] ?? _tick;
+          _parseCities(pkt.data['world']);
+          if (pkt.data['economy'] != null) {
+            _economy = EconomyState.fromJson(pkt.data['economy']);
           }
-          break;
 
-        case 'PROPOSALS':
-          final rawProposals = data['proposals'] as List<dynamic>? ?? [];
-          _proposals = rawProposals
-              .map((p) => Proposal.fromJson(p as Map<String, dynamic>))
-              .toList();
-          break;
+      // ---- Phase Change ----
+        case S2C.phaseChange:
+          _tick = pkt.data['tick'] ?? _tick;
+          _phase = pkt.data['phase'] ?? _phase;
 
-        case 'ROUND_RESULT':
-          final status = data['status'] ?? '';
-          if (status == 'APPLIED') {
-            _winnerAgent = data['winner_agent'];
-            final wp = data['winning_policy'] as Map<String, dynamic>?;
-            if (wp != null) {
-              _winningPolicy = Proposal.fromJson(wp);
+      // ---- Round Result (the big payload each tick) ----
+        case S2C.roundResult:
+          _tick = pkt.data['tick'] ?? _tick;
+          _parseCities(pkt.data['world']);
+          if (pkt.data['economy'] != null) {
+            _economy = EconomyState.fromJson(pkt.data['economy']);
+            _priceHistory.add(_economy.promptPrice);
+            // Keep last 100 prices
+            if (_priceHistory.length > 100) {
+              _priceHistory = _priceHistory.sublist(_priceHistory.length - 100);
             }
-            _priceHistory.add(_regime.price);
-
-            _history.add(RoundResult(
-              round: _round,
-              winnerAgent: _winnerAgent!,
-              winningPolicy: _winningPolicy!,
-              regime: _regime,
-            ));
           }
-          _phase = 'RESULT';
-          break;
+          final rawEvents = pkt.data['events'] as List<dynamic>? ?? [];
+          _events = rawEvents
+              .map((e) => EventEntry.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _phase = 'TICK_COMPLETE';
+
+      // ---- City Update (delta) ----
+        case S2C.cityUpdate:
+          final cityId = pkt.data['city_id'] as String?;
+          final cityData = pkt.data['city'] as Map<String, dynamic>?;
+          if (cityId != null && cityData != null) {
+            _cities[cityId] = City.fromJson(cityId, cityData);
+          }
+
+      // ---- Economy Tick ----
+        case S2C.economyTick:
+        // Lightweight economy update
+          _tick = pkt.data['tick'] ?? _tick;
+
+      // ---- Event Log ----
+        case S2C.eventLog:
+          final rawEvents = pkt.data['events'] as List<dynamic>? ?? [];
+          _events = rawEvents
+              .map((e) => EventEntry.fromJson(e as Map<String, dynamic>))
+              .toList();
+      }
+    });
+  }
+
+  void _parseCities(Map<String, dynamic>? worldData) {
+    if (worldData == null) return;
+    final citiesRaw = worldData['cities'] as Map<String, dynamic>? ?? {};
+    citiesRaw.forEach((id, data) {
+      if (data is Map<String, dynamic>) {
+        _cities[id] = City.fromJson(id, data);
       }
     });
   }
@@ -106,15 +130,13 @@ class _SwarmDashboardState extends State<SwarmDashboard> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Left: Agent proposals
-                Expanded(flex: 3, child: _buildProposalPanel()),
-                // Right: Market regime + history
-                Expanded(flex: 2, child: _buildMarketPanel()),
+                // Left: Cities
+                Expanded(flex: 3, child: _buildCityPanel()),
+                // Right: Economy + Agents + Events
+                Expanded(flex: 2, child: _buildSidePanel()),
               ],
             ),
           ),
-          // Bottom: Winning policy banner
-          if (_winningPolicy != null) _buildWinnerBanner(),
         ],
       ),
     );
@@ -126,344 +148,473 @@ class _SwarmDashboardState extends State<SwarmDashboard> {
 
   Widget _buildHeader() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
       decoration: BoxDecoration(
         color: Colors.black38,
         border: Border(bottom: BorderSide(color: _phaseColor(), width: 2)),
       ),
       child: Row(
         children: [
-          // Title
           const Text(
-            'SWARM POLICY ENGINE',
+            'HYPERINFLATION',
             style: TextStyle(
               color: Colors.white,
               fontSize: 18,
               fontWeight: FontWeight.w900,
-              letterSpacing: 2,
+              letterSpacing: 3,
+            ),
+          ),
+          const SizedBox(width: 16),
+          // Connection dot
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: _connected ? Colors.greenAccent : Colors.redAccent,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _connected ? (_clientId ?? 'connected') : 'disconnected',
+            style: TextStyle(
+              color: _connected ? Colors.white38 : Colors.redAccent,
+              fontSize: 11,
             ),
           ),
           const Spacer(),
-
-          // Phase pill
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            decoration: BoxDecoration(
-              color: _phaseColor().withOpacity(0.2),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _phaseColor(), width: 1),
-            ),
-            child: Text(
-              _phase,
-              style: TextStyle(
-                color: _phaseColor(),
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                letterSpacing: 1,
-              ),
-            ),
-          ),
-          const SizedBox(width: 24),
-
-          // Round
-          _headerStat('ROUND', '$_round'),
-          const SizedBox(width: 24),
-
-          // Price
+          _phasePill(),
+          const SizedBox(width: 20),
+          _headerStat('TICK', '$_tick'),
+          const SizedBox(width: 20),
           _headerStat(
-            'PRICE',
-            '\$${_regime.price.toStringAsFixed(2)}',
+            'PROMPT \$',
+            _economy.promptPrice.toStringAsFixed(2),
             valueColor: Colors.greenAccent,
-            fontSize: 22,
+            fontSize: 20,
           ),
-          const SizedBox(width: 24),
-
-          // Version
-          _headerStat('VERSION', '${_regime.version}'),
+          const SizedBox(width: 20),
+          _headerStat('DEMAND', '${_economy.currentDemand}'),
+          const SizedBox(width: 20),
+          _headerStat('SUPPLY', '${_economy.totalSupply}'),
+          if (_activeModules.isNotEmpty) ...[
+            const SizedBox(width: 20),
+            _headerStat('MODULES', _activeModules.join(', ')),
+          ],
         ],
       ),
     );
   }
 
+  Widget _phasePill() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+      decoration: BoxDecoration(
+        color: _phaseColor().withOpacity(0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _phaseColor(), width: 1),
+      ),
+      child: Text(
+        _phase,
+        style: TextStyle(
+          color: _phaseColor(),
+          fontWeight: FontWeight.bold,
+          fontSize: 12,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
   Widget _headerStat(String label, String value,
-      {Color valueColor = Colors.white, double fontSize = 16}) {
+      {Color valueColor = Colors.white, double fontSize = 14}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Text(label,
-            style: const TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+            style: const TextStyle(
+                color: Colors.white30, fontSize: 9, letterSpacing: 1)),
         Text(value,
             style: TextStyle(
-                color: valueColor, fontSize: fontSize, fontWeight: FontWeight.bold)),
+                color: valueColor,
+                fontSize: fontSize,
+                fontWeight: FontWeight.bold)),
       ],
     );
   }
 
   Color _phaseColor() {
     switch (_phase) {
-      case 'PROPOSING':
+      case 'COLLECTING':
         return Colors.cyanAccent;
-      case 'EVALUATING':
+      case 'PROCESSING':
         return Colors.amberAccent;
-      case 'MEDIATING':
+      case 'BROADCASTING':
         return Colors.purpleAccent;
-      case 'RESULT':
+      case 'TICK_COMPLETE':
         return Colors.greenAccent;
+      case 'DISCONNECTED':
+        return Colors.redAccent;
       default:
         return Colors.white38;
     }
   }
 
   // ==================================================================
-  //  PROPOSAL PANEL (LEFT)
+  //  CITY PANEL (LEFT)
   // ==================================================================
 
-  Widget _buildProposalPanel() {
-    if (_proposals.isEmpty) {
-      return Center(
+  Widget _buildCityPanel() {
+    if (_cities.isEmpty) {
+      return const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              _phase == 'PROPOSING' ? Icons.hourglass_top : Icons.smart_toy,
-              color: Colors.white24,
-              size: 48,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              _phase == 'PROPOSING'
-                  ? 'Agents are thinking...'
-                  : 'Waiting for next round',
-              style: const TextStyle(color: Colors.white38, fontSize: 14),
-            ),
+            Icon(Icons.location_city, color: Colors.white24, size: 48),
+            SizedBox(height: 12),
+            Text('Waiting for world data...',
+                style: TextStyle(color: Colors.white38, fontSize: 14)),
           ],
         ),
       );
     }
 
+    final cities = _cities.values.toList();
+
     return ListView.builder(
       padding: const EdgeInsets.all(12),
-      itemCount: _proposals.length,
-      itemBuilder: (context, i) {
-        final p = _proposals[i];
-        final isWinner = p.agentId == _winnerAgent;
-        final color = Color(agentColors[p.agentId] ?? 0xFF888888);
-        final personality = agentPersonalities[p.agentId] ?? p.agentId;
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          decoration: BoxDecoration(
-            color: isWinner
-                ? color.withOpacity(0.15)
-                : Colors.white.withOpacity(0.04),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isWinner ? color : Colors.white12,
-              width: isWinner ? 2 : 1,
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Agent header row
-                Row(
-                  children: [
-                    // Agent color dot
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      personality.toUpperCase(),
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      p.agentId,
-                      style: const TextStyle(color: Colors.white24, fontSize: 11),
-                    ),
-                    const Spacer(),
-                    if (isWinner)
-                      Container(
-                        padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.greenAccent.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          '★ WINNER',
-                          style: TextStyle(
-                            color: Colors.greenAccent,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    const SizedBox(width: 8),
-                    // Satisfaction
-                    Text(
-                      '${(p.satisfaction * 100).toInt()}%',
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 8),
-
-                // Satisfaction bar
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: p.satisfaction,
-                    backgroundColor: Colors.white10,
-                    valueColor: AlwaysStoppedAnimation(color.withOpacity(0.7)),
-                    minHeight: 3,
-                  ),
-                ),
-
-                const SizedBox(height: 8),
-
-                // Proposal text
-                Text(
-                  p.proposedText,
-                  style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                ),
-
-                const SizedBox(height: 8),
-
-                // Params row
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: p.params.entries.map((e) {
-                    return _paramChip(e.key, e.value);
-                  }).toList(),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      itemCount: cities.length,
+      itemBuilder: (context, i) => _buildCityCard(cities[i]),
     );
   }
 
-  Widget _paramChip(String label, double value) {
+  Widget _buildCityCard(City city) {
+    final healthColor = _statColor(city.happiness);
+    final infraColor = _statColor(city.infrastructure);
+    final defenseColor = _statColor(city.digitalDefenses);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(4),
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white12, width: 1),
       ),
-      child: Text(
-        '$label: ${value.toStringAsFixed(2)}',
-        style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
-      ),
-    );
-  }
-
-  // ==================================================================
-  //  MARKET PANEL (RIGHT)
-  // ==================================================================
-
-  Widget _buildMarketPanel() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Regime params
-          _sectionTitle('MARKET REGIME'),
-          const SizedBox(height: 8),
-          _regimeRow('Price', '\$${_regime.price.toStringAsFixed(2)}', Colors.greenAccent),
-          _regimeRow('Drift', _regime.drift.toStringAsFixed(3), _driftColor()),
-          _regimeRow('Volatility', _regime.volatility.toStringAsFixed(3), _volColor()),
-          _regimeRow('Liquidity', _regime.liquidity.toStringAsFixed(3), Colors.cyanAccent),
-          _regimeRow('Spread (bps)', _regime.spreadBps.toStringAsFixed(1), Colors.white54),
-          _regimeRow('Shock Prob', _regime.shockProb.toStringAsFixed(4), Colors.redAccent),
+          // City name + population
+          Row(
+            children: [
+              const Icon(Icons.location_city,
+                  color: Colors.cyanAccent, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                city.name.toUpperCase(),
+                style: const TextStyle(
+                  color: Colors.cyanAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  letterSpacing: 1,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(city.id,
+                  style:
+                  const TextStyle(color: Colors.white24, fontSize: 10)),
+              const Spacer(),
+              Text(
+                '${_formatPop(city.population)} pop',
+                style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 12,
+                    fontFamily: 'monospace'),
+              ),
+            ],
+          ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 10),
 
-          // Price history
-          _sectionTitle('PRICE HISTORY'),
+          // Stat bars
+          _statBar('Happiness', city.happiness, healthColor),
+          _statBar('Infrastructure', city.infrastructure, infraColor),
+          _statBar('Defenses', city.digitalDefenses, defenseColor),
+          _statBar('Social Cohesion', city.socialCohesion,
+              _statColor(city.socialCohesion)),
+          _statBar('Employment', city.employmentRate,
+              _statColor(city.employmentRate)),
+
           const SizedBox(height: 8),
-          if (_priceHistory.length >= 2)
+
+          // Treasury + GDP
+          Row(
+            children: [
+              _miniStat('Treasury',
+                  '\$${city.treasury.toStringAsFixed(1)}', Colors.amberAccent),
+              const SizedBox(width: 16),
+              _miniStat('GDP/tick',
+                  city.economicOutput.toStringAsFixed(2), Colors.greenAccent),
+              const SizedBox(width: 16),
+              _miniStat(
+                  'Tax', '${(city.taxRate * 100).toStringAsFixed(0)}%',
+                  Colors.white54),
+              const Spacer(),
+              Text(
+                'Region: ${city.regionId}',
+                style: const TextStyle(color: Colors.white24, fontSize: 10),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statBar(String label, double value, Color color) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(label,
+                style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: (value / 100).clamp(0.0, 1.0),
+                backgroundColor: Colors.white10,
+                valueColor: AlwaysStoppedAnimation(color.withOpacity(0.8)),
+                minHeight: 6,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 40,
+            child: Text(
+              value.toStringAsFixed(1),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                  color: color,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniStat(String label, String value, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(
+                color: Colors.white24, fontSize: 9, letterSpacing: 0.5)),
+        Text(value,
+            style: TextStyle(
+                color: color,
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'monospace')),
+      ],
+    );
+  }
+
+  Color _statColor(double v) {
+    if (v >= 70) return Colors.greenAccent;
+    if (v >= 40) return Colors.amberAccent;
+    return Colors.redAccent;
+  }
+
+  String _formatPop(int pop) {
+    if (pop >= 1000000) return '${(pop / 1000000).toStringAsFixed(1)}M';
+    if (pop >= 1000) return '${(pop / 1000).toStringAsFixed(0)}K';
+    return '$pop';
+  }
+
+  // ==================================================================
+  //  SIDE PANEL (RIGHT)
+  // ==================================================================
+
+  Widget _buildSidePanel() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Economy section
+          _sectionTitle('PROMPT MARKET'),
+          const SizedBox(height: 6),
+          _economyRow('Price', '\$${_economy.promptPrice.toStringAsFixed(2)}',
+              Colors.greenAccent),
+          _economyRow('Demand', '${_economy.currentDemand}', Colors.cyanAccent),
+          _economyRow('Supply', '${_economy.totalSupply}', Colors.white54),
+          _economyRow(
+              'Market Value',
+              '\$${_economy.totalMarketValue.toStringAsFixed(0)}',
+              Colors.amberAccent),
+          _economyRow(
+              'Open Orders', '${_economy.openOrders}', Colors.white38),
+
+          const SizedBox(height: 12),
+
+          // Price chart
+          if (_priceHistory.length >= 2) ...[
+            _sectionTitle('PRICE HISTORY'),
+            const SizedBox(height: 6),
             SizedBox(
-              height: 120,
+              height: 100,
               child: CustomPaint(
-                size: const Size(double.infinity, 120),
+                size: const Size(double.infinity, 100),
                 painter: _PriceChartPainter(_priceHistory),
               ),
-            )
-          else
-            const Text(
-              'Waiting for data...',
-              style: TextStyle(color: Colors.white24, fontSize: 12),
             ),
+            const SizedBox(height: 12),
+          ],
 
-          const SizedBox(height: 24),
+          // Agents section
+          _sectionTitle('AGENTS'),
+          const SizedBox(height: 6),
+          ..._economy.agentEconomies.entries.map((e) {
+            final id = e.key;
+            final econ = e.value;
+            final color = Color(agentColors[id] ?? 0xFF888888);
+            final name = agentNames[id] ?? id;
 
-          // Round history
-          _sectionTitle('ROUND HISTORY'),
-          const SizedBox(height: 8),
-          ..._history.reversed.take(10).map((r) {
-            final color = Color(agentColors[r.winnerAgent] ?? 0xFF888888);
-            final personality = agentPersonalities[r.winnerAgent] ?? r.winnerAgent;
             return Container(
-              margin: const EdgeInsets.only(bottom: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              margin: const EdgeInsets.only(bottom: 6),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(4),
+                color: econ.inDebt
+                    ? Colors.redAccent.withOpacity(0.08)
+                    : Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: econ.inDebt ? Colors.redAccent.withOpacity(0.3) : Colors.white10,
+                  width: 1,
+                ),
               ),
               child: Row(
                 children: [
-                  Text(
-                    'R${r.round}',
-                    style: const TextStyle(
-                        color: Colors.white38, fontSize: 11, fontFamily: 'monospace'),
-                  ),
-                  const SizedBox(width: 8),
                   Container(
                     width: 8,
                     height: 8,
-                    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                    decoration:
+                    BoxDecoration(color: color, shape: BoxShape.circle),
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      personality,
-                      style: TextStyle(color: color, fontSize: 11),
-                      overflow: TextOverflow.ellipsis,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name,
+                            style: TextStyle(
+                                color: color,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold)),
+                        Text(
+                          'Prompts: ${econ.allocatedPrompts}  •  Served: ${econ.promptsServed}',
+                          style: const TextStyle(
+                              color: Colors.white30, fontSize: 10),
+                        ),
+                      ],
                     ),
                   ),
-                  Text(
-                    '\$${r.regime.price.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                        color: Colors.greenAccent, fontSize: 11, fontFamily: 'monospace'),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '\$${econ.wallet.toStringAsFixed(1)}',
+                        style: TextStyle(
+                          color: econ.inDebt
+                              ? Colors.redAccent
+                              : Colors.greenAccent,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                      if (econ.inDebt)
+                        const Text('IN DEBT',
+                            style: TextStyle(
+                                color: Colors.redAccent,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold)),
+                    ],
                   ),
                 ],
               ),
             );
-          }).toList(),
+          }),
+
+          const SizedBox(height: 16),
+
+          // Events section
+          _sectionTitle('EVENTS (TICK $_tick)'),
+          const SizedBox(height: 6),
+          if (_events.isEmpty)
+            const Text('No events yet.',
+                style: TextStyle(color: Colors.white24, fontSize: 11))
+          else
+            ..._events.map((evt) {
+              final eventColor = _eventColor(evt.type);
+              final agentColor = evt.agent != null
+                  ? Color(agentColors[evt.agent] ?? 0xFF888888)
+                  : Colors.white38;
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 4),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: eventColor.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(4),
+                  border:
+                  Border(left: BorderSide(color: eventColor, width: 3)),
+                ),
+                child: Row(
+                  children: [
+                    if (evt.agent != null) ...[
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                            color: agentColor, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+                    Expanded(
+                      child: Text(
+                        evt.description,
+                        style: const TextStyle(
+                            color: Colors.white60, fontSize: 11),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      evt.type,
+                      style: TextStyle(
+                        color: eventColor,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
         ],
       ),
     );
@@ -473,7 +624,7 @@ class _SwarmDashboardState extends State<SwarmDashboard> {
     return Text(
       text,
       style: const TextStyle(
-        color: Colors.white38,
+        color: Colors.white30,
         fontSize: 11,
         fontWeight: FontWeight.bold,
         letterSpacing: 2,
@@ -481,117 +632,75 @@ class _SwarmDashboardState extends State<SwarmDashboard> {
     );
   }
 
-  Widget _regimeRow(String label, String value, Color valueColor) {
+  Widget _economyRow(String label, String value, Color color) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: Colors.white54, fontSize: 13)),
-          Text(
-            value,
-            style: TextStyle(
-              color: valueColor,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace',
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Color _driftColor() =>
-      _regime.drift >= 0 ? Colors.greenAccent : Colors.redAccent;
-
-  Color _volColor() {
-    if (_regime.volatility < 0.5) return Colors.greenAccent;
-    if (_regime.volatility < 2.0) return Colors.amberAccent;
-    return Colors.redAccent;
-  }
-
-  // ==================================================================
-  //  WINNER BANNER (BOTTOM)
-  // ==================================================================
-
-  Widget _buildWinnerBanner() {
-    final color = Color(agentColors[_winnerAgent] ?? 0xFF888888);
-    final personality = agentPersonalities[_winnerAgent] ?? _winnerAgent ?? '';
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        border: Border(top: BorderSide(color: color, width: 2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              const Text(
-                '★ WINNING POLICY',
-                style: TextStyle(
-                  color: Colors.greenAccent,
-                  fontSize: 11,
+          Text(label,
+              style: const TextStyle(color: Colors.white38, fontSize: 12)),
+          Text(value,
+              style: TextStyle(
+                  color: color,
+                  fontSize: 13,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: 2,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Round $_round  •  $personality',
-                style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            _winningPolicy!.proposedText,
-            style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
+                  fontFamily: 'monospace')),
         ],
       ),
     );
+  }
+
+  Color _eventColor(String type) {
+    if (type.contains('ATTACK') || type.contains('DAMAGE')) {
+      return Colors.redAccent;
+    }
+    if (type.contains('BUILD') || type.contains('BOOST') ||
+        type.contains('DEFEND')) {
+      return Colors.greenAccent;
+    }
+    if (type.contains('BID') || type.contains('ASK') ||
+        type.contains('EARN')) {
+      return Colors.amberAccent;
+    }
+    if (type.contains('INFILTRATE') || type.contains('PROPAGANDA')) {
+      return Colors.purpleAccent;
+    }
+    if (type.contains('ALLIANCE')) return Colors.cyanAccent;
+    return Colors.white38;
   }
 }
 
 // ==================================================================
-//  SIMPLE PRICE CHART PAINTER
+//  PRICE CHART
 // ==================================================================
 
 class _PriceChartPainter extends CustomPainter {
   final List<double> prices;
-
   _PriceChartPainter(this.prices);
 
   @override
   void paint(Canvas canvas, Size size) {
     if (prices.length < 2) return;
 
-    final minP = prices.reduce((a, b) => a < b ? a : b) * 0.98;
-    final maxP = prices.reduce((a, b) => a > b ? a : b) * 1.02;
+    final minP = prices.reduce((a, b) => a < b ? a : b) * 0.95;
+    final maxP = prices.reduce((a, b) => a > b ? a : b) * 1.05;
     final range = maxP - minP;
     if (range == 0) return;
 
-    final paint = Paint()
+    final linePaint = Paint()
       ..color = Colors.greenAccent
-      ..strokeWidth = 2
+      ..strokeWidth = 1.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
     final fillPaint = Paint()
-      ..shader = LinearGradient(
+      ..shader = const LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          Colors.greenAccent.withOpacity(0.3),
-          Colors.greenAccent.withOpacity(0.0),
+          Color(0x4069F0AE),
+          Color(0x0069F0AE),
         ],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
 
@@ -616,23 +725,28 @@ class _PriceChartPainter extends CustomPainter {
     fillPath.close();
 
     canvas.drawPath(fillPath, fillPaint);
-    canvas.drawPath(path, paint);
+    canvas.drawPath(path, linePaint);
 
-    // Draw price labels
-    final textStyle = TextStyle(color: Colors.white38, fontSize: 9);
-    _drawText(canvas, '\$${maxP.toStringAsFixed(1)}', Offset(2, 2), textStyle);
-    _drawText(canvas, '\$${minP.toStringAsFixed(1)}', Offset(2, size.height - 14), textStyle);
+    // Labels
+    final style = const TextStyle(color: Colors.white30, fontSize: 9);
+    _drawText(canvas, '\$${maxP.toStringAsFixed(2)}', const Offset(2, 0), style);
+    _drawText(
+        canvas,
+        '\$${minP.toStringAsFixed(2)}',
+        Offset(2, size.height - 12),
+        style);
   }
 
   void _drawText(Canvas canvas, String text, Offset offset, TextStyle style) {
-    final span = TextSpan(text: text, style: style);
-    final tp = TextPainter(text: span, textDirection: TextDirection.ltr);
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+    );
     tp.layout();
     tp.paint(canvas, offset);
   }
 
   @override
   bool shouldRepaint(covariant _PriceChartPainter old) =>
-      old.prices.length != prices.length ||
-          (prices.isNotEmpty && old.prices.isNotEmpty && old.prices.last != prices.last);
+      prices.length != old.prices.length;
 }

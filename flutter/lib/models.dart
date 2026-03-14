@@ -1,93 +1,216 @@
-class MarketRegime {
-  final double price;
-  final double drift;
-  final double volatility;
-  final double liquidity;
-  final double spreadBps;
-  final double shockProb;
-  final int version;
-  final int updatedAtMs;
+// =============================================================================
+//  DATA MODELS — matches the new Netty packet payloads
+// =============================================================================
 
-  MarketRegime({
-    this.price = 0.0,
-    this.drift = 0.0,
-    this.volatility = 0.0,
-    this.liquidity = 0.0,
-    this.spreadBps = 0.0,
-    this.shockProb = 0.0,
-    this.version = 0,
-    this.updatedAtMs = 0,
+class City {
+  final String id;
+  final String name;
+  final String regionId;
+  final int tileX;
+  final int tileY;
+  final int population;
+  final double happiness;
+  final double employmentRate;
+  final double infrastructure;
+  final double digitalDefenses;
+  final double socialCohesion;
+  final double treasury;
+  final double economicOutput;
+  final double taxRate;
+
+  City({
+    required this.id,
+    required this.name,
+    this.regionId = '',
+    this.tileX = 0,
+    this.tileY = 0,
+    this.population = 0,
+    this.happiness = 0,
+    this.employmentRate = 0,
+    this.infrastructure = 0,
+    this.digitalDefenses = 0,
+    this.socialCohesion = 0,
+    this.treasury = 0,
+    this.economicOutput = 0,
+    this.taxRate = 0,
   });
 
-  factory MarketRegime.fromJson(Map<String, dynamic> json) {
-    return MarketRegime(
-      price: (json['price'] ?? 0).toDouble(),
-      drift: (json['drift'] ?? 0).toDouble(),
-      volatility: (json['volatility'] ?? 0).toDouble(),
-      liquidity: (json['liquidity'] ?? 0).toDouble(),
-      spreadBps: (json['spread_bps'] ?? 0).toDouble(),
-      shockProb: (json['shock_prob'] ?? 0).toDouble(),
-      version: json['version'] ?? 0,
-      updatedAtMs: json['updated_at_ms'] ?? 0,
+  factory City.fromJson(String id, Map<String, dynamic> json) {
+    return City(
+      id: id,
+      name: json['name'] ?? id,
+      regionId: json['region_id'] ?? '',
+      tileX: json['tile_x'] ?? 0,
+      tileY: json['tile_y'] ?? 0,
+      population: json['population'] ?? 0,
+      happiness: _d(json['happiness']),
+      employmentRate: _d(json['employment_rate']),
+      infrastructure: _d(json['infrastructure']),
+      digitalDefenses: _d(json['digital_defenses']),
+      socialCohesion: _d(json['social_cohesion']),
+      treasury: _d(json['treasury']),
+      economicOutput: _d(json['economic_output']),
+      taxRate: _d(json['tax_rate']),
     );
   }
 }
 
-class Proposal {
-  final String agentId;
-  final String proposedText;
-  final Map<String, double> params;
-  final double satisfaction;
+class AgentInfo {
+  final String id;
+  final String name;
+  final String description;
+  final String priorities;
+  final double aggression;
+  final double riskTolerance;
+  final double cooperation;
+  final bool alive;
+  final double wallet;
+  final int allocatedPrompts;
+  final int promptsServed;
+  final bool inDebt;
 
-  Proposal({
-    required this.agentId,
-    required this.proposedText,
-    required this.params,
-    required this.satisfaction,
+  AgentInfo({
+    required this.id,
+    this.name = '',
+    this.description = '',
+    this.priorities = '',
+    this.aggression = 0,
+    this.riskTolerance = 0,
+    this.cooperation = 0,
+    this.alive = true,
+    this.wallet = 0,
+    this.allocatedPrompts = 0,
+    this.promptsServed = 0,
+    this.inDebt = false,
   });
 
-  factory Proposal.fromJson(Map<String, dynamic> json) {
-    // 1. Safely extract the map as a generic Map first
-    final rawParams = json['params'] as Map<String, dynamic>? ?? {};
+  factory AgentInfo.fromJson(String id, Map<String, dynamic> json) {
+    return AgentInfo(
+      id: id,
+      name: json['name'] ?? id,
+      description: json['description'] ?? '',
+      priorities: json['priorities'] ?? '',
+      aggression: _d(json['aggression']),
+      riskTolerance: _d(json['risk_tolerance']),
+      cooperation: _d(json['cooperation']),
+      alive: json['alive'] ?? true,
+      wallet: _d(json['wallet']),
+      allocatedPrompts: json['allocated_prompts'] ?? 0,
+      promptsServed: json['prompts_served'] ?? 0,
+      inDebt: json['in_debt'] ?? false,
+    );
+  }
+}
 
-    // 2. Convert values to double by casting to 'num' first to avoid type errors
-    final params = rawParams.map((k, v) {
-      return MapEntry(k, (v as num? ?? 0).toDouble());
+class EconomyState {
+  final double promptPrice;
+  final int totalSupply;
+  final int currentDemand;
+  final double totalMarketValue;
+  final int openOrders;
+  final Map<String, AgentEconomy> agentEconomies;
+
+  EconomyState({
+    this.promptPrice = 1.0,
+    this.totalSupply = 0,
+    this.currentDemand = 0,
+    this.totalMarketValue = 1000.0,
+    this.openOrders = 0,
+    this.agentEconomies = const {},
+  });
+
+  factory EconomyState.fromJson(Map<String, dynamic> json) {
+    final market = json['market'] as Map<String, dynamic>? ?? {};
+    final agentsRaw = json['agents'] as Map<String, dynamic>? ?? {};
+
+    final agents = <String, AgentEconomy>{};
+    agentsRaw.forEach((id, data) {
+      if (data is Map<String, dynamic>) {
+        agents[id] = AgentEconomy.fromJson(data);
+      }
     });
 
-    return Proposal(
-      agentId: json['agentId'] ?? '',
-      proposedText: json['proposedText'] ?? '',
-      params: params,
-      satisfaction: (json['satisfaction'] as num? ?? 0).toDouble(),
+    return EconomyState(
+      promptPrice: _d(market['price'], fallback: 1.0),
+      totalSupply: market['total_supply'] ?? 0,
+      currentDemand: market['current_demand'] ?? 0,
+      totalMarketValue: _d(market['total_market_value'], fallback: 1000.0),
+      openOrders: market['open_orders'] ?? 0,
+      agentEconomies: agents,
     );
   }
 }
 
-class RoundResult {
-  final int round;
-  final String winnerAgent;
-  final Proposal winningPolicy;
-  final MarketRegime regime;
+class AgentEconomy {
+  final double wallet;
+  final int allocatedPrompts;
+  final int promptsServed;
+  final double totalEarnings;
+  final double totalSpending;
+  final bool inDebt;
 
-  RoundResult({
-    required this.round,
-    required this.winnerAgent,
-    required this.winningPolicy,
-    required this.regime,
+  AgentEconomy({
+    this.wallet = 0,
+    this.allocatedPrompts = 0,
+    this.promptsServed = 0,
+    this.totalEarnings = 0,
+    this.totalSpending = 0,
+    this.inDebt = false,
   });
+
+  factory AgentEconomy.fromJson(Map<String, dynamic> json) {
+    return AgentEconomy(
+      wallet: _d(json['wallet']),
+      allocatedPrompts: json['allocated_prompts'] ?? 0,
+      promptsServed: json['prompts_served'] ?? 0,
+      totalEarnings: _d(json['total_earnings']),
+      totalSpending: _d(json['total_spending']),
+      inDebt: json['in_debt'] ?? false,
+    );
+  }
 }
 
-/// Agent personality labels for display
-const agentPersonalities = {
-  'agent-0': 'Blue-Collar Worker',
-  'agent-1': 'Corporate CEO',
-  'agent-2': 'Career Politician',
-  'agent-3': 'Parent',
-  'agent-4': 'Small Biz Owner',
+class EventEntry {
+  final String type;
+  final String? source;
+  final String? agent;
+  final String? target;
+  final String description;
+  final int ts;
+
+  EventEntry({
+    required this.type,
+    this.source,
+    this.agent,
+    this.target,
+    required this.description,
+    this.ts = 0,
+  });
+
+  factory EventEntry.fromJson(Map<String, dynamic> json) {
+    return EventEntry(
+      type: json['type'] ?? 'UNKNOWN',
+      source: json['source'],
+      agent: json['agent'],
+      target: json['target'],
+      description: json['description'] ?? '',
+      ts: json['ts'] ?? 0,
+    );
+  }
+}
+
+// =============================================================================
+//  AGENT DISPLAY CONSTANTS
+// =============================================================================
+
+const agentNames = {
+  'agent-0': 'The Grinder',
+  'agent-1': 'The Shark',
+  'agent-2': 'The Diplomat',
+  'agent-3': 'The Gambler',
+  'agent-4': 'The Architect',
 };
 
-/// Agent colors for visual distinction
 const agentColors = {
   'agent-0': 0xFF42A5F5, // blue
   'agent-1': 0xFFEF5350, // red
@@ -95,3 +218,12 @@ const agentColors = {
   'agent-3': 0xFF66BB6A, // green
   'agent-4': 0xFFFFA726, // orange
 };
+
+// =============================================================================
+//  HELPER
+// =============================================================================
+
+double _d(dynamic v, {double fallback = 0.0}) {
+  if (v is num) return v.toDouble();
+  return fallback;
+}
