@@ -2,6 +2,10 @@ package com.hyperinflation.ai;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hyperinflation.agent.Agent;
+import com.hyperinflation.core.Action;
+import com.hyperinflation.econ.EconomyEngine;
+import com.hyperinflation.world.World;
 
 import java.net.URI;
 import java.net.http.HttpClient;

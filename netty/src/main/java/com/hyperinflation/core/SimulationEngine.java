@@ -51,7 +51,7 @@ public final class SimulationEngine {
         this.registry          = registry;
         this.economyEngine     = economyEngine;
         this.connectionManager = connectionManager;
-        this.actionProcessor   = new ActionProcessor(world, economyEngine, eventLog);
+        this.actionProcessor   = new ActionProcessor(world, economyEngine);
     }
 
     // =====================================================================
@@ -124,10 +124,6 @@ public final class SimulationEngine {
                     // Phase 2: Process all actions
                     phase = Phase.PROCESSING;
                     broadcastPhase();
-                    actionProcessor.processAll(allActions);
-
-                    // Phase 3: Run economy tick
-                    economyEngine.tick(world, currentTick);
 
                     // Phase 4: Broadcast results
                     phase = Phase.BROADCASTING;
