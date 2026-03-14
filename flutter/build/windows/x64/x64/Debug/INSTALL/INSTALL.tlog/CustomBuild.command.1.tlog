@@ -1,0 +1,10 @@
+^C:\USERS\NAKSH\ONEDRIVE\DESKTOP\ROCKETHACKS2026MONOREPO\FLUTTER\BUILD\WINDOWS\X64\CMAKEFILES\45DB2057C449FEE80DBB10D84712C036\INSTALL_FORCE.RULE
+setlocal
+cd .
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

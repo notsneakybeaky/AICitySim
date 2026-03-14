@@ -1,0 +1,53 @@
+# =========================
+# Root / Node Tooling
+# =========================
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# =========================
+# Java / Gradle (Netty Engine)
+# =========================
+netty/.gradle/
+netty/build/
+netty/out/
+netty/bin/
+netty/*.class
+netty/*.log
+# Ignore all JARs EXCEPT the Gradle wrapper (crucial for sharing the repo)
+netty/*.jar
+!gradle/wrapper/gradle-wrapper.jar
+!netty/gradle/wrapper/gradle-wrapper.jar
+
+# =========================
+# Python (AI Service)
+# =========================
+python/__pycache__/
+python/*.py[cod]
+python/*$py.class
+python/.venv/
+python/env/
+python/.env
+python/.pytest_cache/
+
+# =========================
+# Flutter / Dart (Dashboard)
+# =========================
+flutter/.dart_tool/
+flutter/.packages
+flutter/.flutter-plugins
+flutter/.flutter-plugins-dependencies
+flutter/.pub-cache/
+flutter/.pub/
+flutter/coverage/
+
+# =========================
+# IDEs & OS Files
+# =========================
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
