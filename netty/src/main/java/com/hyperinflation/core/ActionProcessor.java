@@ -4,170 +4,174 @@ import com.hyperinflation.econ.EconomyEngine;
 import com.hyperinflation.world.City;
 import com.hyperinflation.world.World;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
-/**
- * Processes a list of Actions against the World and EconomyEngine.
- * This is where actions have real effects.
- */
 public final class ActionProcessor {
 
     private final World world;
     private final EconomyEngine economy;
-    private final List<Map<String, Object>> eventLog;
+    private final List<Map<String, Object>> events = new ArrayList<>();
 
-    public ActionProcessor(World world, EconomyEngine economy,
-                           List<Map<String, Object>> eventLog) {
-        this.world    = world;
-        this.economy  = economy;
-        this.eventLog = eventLog;
+    public ActionProcessor(World world, EconomyEngine economy) {
+        this.world   = world;
+        this.economy = economy;
     }
 
-    public void processAll(List<Action> actions) {
-        for (Action action : actions) {
-            try {
-                process(action);
-            } catch (Exception e) {
-                System.err.println("[PROCESSOR] Failed to process action "
-                        + action.getType() + ": " + e.getMessage());
-            }
-        }
-    }
+    public List<Map<String, Object>> getEvents() { return events; }
+    public void clearEvents()                     { events.clear(); }
 
-    private void process(Action action) {
+    public void process(Action action) {
+        if (action.getType() == Action.Type.NO_OP) return;
+
+        String agentId                   = action.getAgentId();
+        String targetId                  = action.getTargetId();
+        EconomyEngine.AgentEconomy econ  = agentId != null ? economy.getAgentEconomy(agentId) : null;
+        City city                        = targetId != null ? world.getCity(targetId) : null;
+
         switch (action.getType()) {
 
-            // ---- Economic actions ----
-            case PLACE_BID -> {
-                double price = action.getParamDouble("price", 0);
-                int quantity = (int) action.getParamDouble("quantity", 1);
-                economy.getPromptMarket().placeBid(
-                        action.getSourceAgentId(), price, quantity);
-                logEvent(action, "Placed bid: " + quantity + " @ " + price);
-            }
-            case PLACE_ASK -> {
-                double price = action.getParamDouble("price", 0);
-                int quantity = (int) action.getParamDouble("quantity", 1);
-                economy.getPromptMarket().placeAsk(
-                        action.getSourceAgentId(), price, quantity);
-                logEvent(action, "Placed ask: " + quantity + " @ " + price);
-            }
-            case DRAIN_TREASURY -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 0);
-                    double drained = city.drainTreasury(amount);
-                    logEvent(action, "Drained " + drained + " from " + city.getName());
-                }
-            }
-            case INJECT_CAPITAL -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 0);
-                    city.injectCapital(amount);
-                    logEvent(action, "Injected " + amount + " into " + city.getName());
-                }
+            case PLACE_BID: {
+                double price = action.param("price", 1.0);
+                int qty      = (int) action.param("quantity", 10);
+                economy.placeBid(agentId, price, qty);
+                event("BID", agentId, targetId,
+                        agentId + " bid " + qty + " prompts @ $" + f(price));
+                break;
             }
 
-            // ---- City actions ----
-            case BUILD_INFRASTRUCTURE -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 5);
-                    city.modifyInfrastructure(amount);
-                    logEvent(action, city.getName() + " infrastructure +" + amount);
-                }
-            }
-            case DAMAGE_INFRASTRUCTURE -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 5);
-                    city.modifyInfrastructure(-amount);
-                    logEvent(action, city.getName() + " infrastructure -" + amount);
-                }
-            }
-            case BOOST_HAPPINESS -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 5);
-                    city.modifyHappiness(amount);
-                    logEvent(action, city.getName() + " happiness +" + amount);
-                }
-            }
-            case DAMAGE_HAPPINESS -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 5);
-                    city.modifyHappiness(-amount);
-                    logEvent(action, city.getName() + " happiness -" + amount);
-                }
+            case BUILD_INFRASTRUCTURE: {
+                if (city == null) break;
+                double amt  = action.param("amount", 5.0);
+                double cost = amt * 2.0;
+                if (econ != null) econ.spend(cost);
+                city.adjustInfrastructure(amt);
+                event("BUILD", agentId, targetId,
+                        agentId + " built +" + f(amt) + " infra in " + city.getName()
+                                + " (-$" + f(cost) + ")");
+                break;
             }
 
-            // ---- Agent actions ----
-            case AGENT_EARN -> {
-                double amount = action.getParamDouble("amount", 0);
-                logEvent(action, action.getSourceAgentId() + " earned " + amount);
-            }
-            case AGENT_SPEND -> {
-                double amount = action.getParamDouble("amount", 0);
-                logEvent(action, action.getSourceAgentId() + " spent " + amount);
-            }
-
-            // ---- Conflict ----
-            case ATTACK_CITY -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double power = action.getParamDouble("power", 10);
-                    city.modifyInfrastructure(-power * 0.5);
-                    city.modifyHappiness(-power * 0.3);
-                    logEvent(action, action.getSourceAgentId()
-                            + " attacked " + city.getName() + " (power=" + power + ")");
-                }
-            }
-            case INFILTRATE -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 3);
-                    city.modifyDefenses(-amount);
-                    logEvent(action, action.getSourceAgentId()
-                            + " infiltrated " + city.getName());
-                }
-            }
-            case SPREAD_PROPAGANDA -> {
-                City city = world.getCity(action.getTargetId());
-                if (city != null) {
-                    double amount = action.getParamDouble("amount", 5);
-                    city.modifySocialCohesion(-amount);
-                    city.modifyHappiness(-amount * 0.5);
-                    logEvent(action, "Propaganda spread in " + city.getName());
-                }
+            case DAMAGE_INFRASTRUCTURE: {
+                if (city == null) break;
+                double amt = action.param("amount", 5.0);
+                city.adjustInfrastructure(-amt);
+                event("SABOTAGE", agentId, targetId,
+                        agentId + " sabotaged " + city.getName() + " infra -" + f(amt));
+                break;
             }
 
-            // ---- Meta ----
-            case CHANGE_MODULE -> {
-                String targetModule = action.getParamString("module_id", "");
-                logEvent(action, "Module switch requested: " + targetModule);
-                // Handled by the engine, not here
+            case BOOST_HAPPINESS: {
+                if (city == null) break;
+                double amt  = action.param("amount", 5.0);
+                double cost = amt * 1.5;
+                if (econ != null) econ.spend(cost);
+                city.adjustHappiness(amt);
+                event("BOOST", agentId, targetId,
+                        agentId + " boosted happiness in " + city.getName()
+                                + " +" + f(amt) + " (-$" + f(cost) + ")");
+                break;
             }
 
-            case NO_OP -> {} // Do nothing
+            case DAMAGE_HAPPINESS: {
+                if (city == null) break;
+                double amt = action.param("amount", 5.0);
+                city.adjustHappiness(-amt);
+                event("UNREST", agentId, targetId,
+                        agentId + " caused unrest in " + city.getName() + " -" + f(amt));
+                break;
+            }
 
-            default -> System.out.println("[PROCESSOR] Unhandled action type: " + action.getType());
+            case ATTACK_CITY: {
+                if (city == null) break;
+                double power = action.param("power", 10.0);
+                double cost  = power * 3.0;
+                if (econ != null) econ.spend(cost);
+                double effective = city.receiveAttack(power);
+                event("ATTACK", agentId, targetId,
+                        agentId + " attacked " + city.getName()
+                                + " (pow=" + f(power) + " eff=" + f(effective) + " -$" + f(cost) + ")");
+                break;
+            }
+
+            case DEFEND_CITY: {
+                if (city == null) break;
+                double amt  = action.param("amount", 5.0);
+                double cost = amt * 1.5;
+                if (econ != null) econ.spend(cost);
+                city.adjustDefenses(amt);
+                event("DEFEND", agentId, targetId,
+                        agentId + " fortified " + city.getName() + " +" + f(amt));
+                break;
+            }
+
+            case INFILTRATE: {
+                if (city == null) break;
+                double amt = action.param("amount", 3.0);
+                city.adjustDefenses(-amt);
+                event("INFILTRATE", agentId, targetId,
+                        agentId + " infiltrated " + city.getName() + " defenses -" + f(amt));
+                break;
+            }
+
+            case SPREAD_PROPAGANDA: {
+                if (city == null) break;
+                double amt = action.param("amount", 3.0);
+                city.adjustSocialCohesion(-amt);
+                event("PROPAGANDA", agentId, targetId,
+                        agentId + " spread propaganda in " + city.getName()
+                                + " cohesion -" + f(amt));
+                break;
+            }
+
+            case DRAIN_TREASURY: {
+                if (city == null) break;
+                double amt    = action.param("amount", 10.0);
+                double actual = Math.min(amt, Math.max(0, city.getTreasury()));
+                city.adjustTreasury(-actual);
+                if (econ != null) econ.earn(actual);
+                event("DRAIN", agentId, targetId,
+                        agentId + " drained $" + f(actual) + " from " + city.getName());
+                break;
+            }
+
+            case INJECT_CAPITAL: {
+                if (city == null) break;
+                double amt = action.param("amount", 10.0);
+                if (econ != null) econ.spend(amt);
+                city.adjustTreasury(amt);
+                event("INJECT", agentId, targetId,
+                        agentId + " injected $" + f(amt) + " into " + city.getName());
+                break;
+            }
+
+            case FORM_ALLIANCE: {
+                String terms = action.paramStr("terms", "mutual cooperation");
+                event("ALLIANCE", agentId, targetId,
+                        agentId + " proposed alliance with " + targetId
+                                + ": \"" + terms + "\"");
+                break;
+            }
+
+            case BREAK_ALLIANCE: {
+                event("ALLIANCE_BREAK", agentId, targetId,
+                        agentId + " broke alliance with " + targetId);
+                break;
+            }
+
+            default:
+                break;
         }
     }
 
-    private void logEvent(Action action, String description) {
-        Map<String, Object> entry = new LinkedHashMap<>();
-        entry.put("tick",        0); // Will be set by the engine
-        entry.put("type",        action.getType().name());
-        entry.put("source",      action.getSourceModuleId());
-        entry.put("agent",       action.getSourceAgentId());
-        entry.put("target",      action.getTargetId());
-        entry.put("description", description);
-        entry.put("ts",          System.currentTimeMillis());
-        eventLog.add(entry);
-        System.out.println("[EVENT] " + description);
+    private void event(String type, String agent, String target, String desc) {
+        Map<String, Object> e = new LinkedHashMap<>();
+        e.put("type",        type);
+        e.put("agent",       agent);
+        e.put("target",      target);
+        e.put("description", desc);
+        e.put("ts",          System.currentTimeMillis());
+        events.add(e);
     }
+
+    private static String f(double v) { return String.format("%.1f", v); }
 }

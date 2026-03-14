@@ -1,84 +1,163 @@
 package com.hyperinflation.econ;
 
-import com.hyperinflation.world.City;
-import com.hyperinflation.world.World;
-
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Runs the economy each simulation tick.
- * Manages the prompt market, agent economies, and price history.
- */
 public final class EconomyEngine {
 
-    private final PromptMarket promptMarket;
-    private final Map<String, AgentEconomy> agentEconomies = new ConcurrentHashMap<>();
-    private final PriceHistory priceHistory;
+    // =====================================================================
+    //  CONFIGURABLE — "The current prompt total value is set to 1000"
+    // =====================================================================
+    public static double TOTAL_PROMPT_VALUE = 1000.0;
 
-    public EconomyEngine() {
-        this.promptMarket = new PromptMarket();
-        this.priceHistory = new PriceHistory(500); // Keep last 500 ticks
-    }
+    private double promptPrice   = 1.0;
+    private int    totalSupply   = 1000;
+    private int    currentDemand = 0;
+    private int    openOrders    = 0;
+    private final Random rng     = new Random();
 
-    /** Register an agent in the economy. Call once per agent at startup. */
-    public void registerAgent(String agentId) {
-        agentEconomies.put(agentId, new AgentEconomy(
-                agentId, EconomyConfig.AGENT_STARTING_WALLET));
-    }
+    // ---- Per-agent economy ----
 
-    /** Main economy tick. Called by SimulationEngine each tick. */
-    public void tick(World world, int tickNumber) {
-        // 1. Run the prompt market
-        promptMarket.tick(tickNumber, agentEconomies);
+    public static final class AgentEconomy {
+        private double  wallet;
+        private int     allocatedPrompts;
+        private int     promptsServed;
+        private double  totalEarnings;
+        private double  totalSpending;
+        private boolean inDebt;
 
-        // 2. Record price history
-        priceHistory.record(tickNumber, promptMarket.getPrice(),
-                promptMarket.getCurrentDemand());
+        public AgentEconomy(double startingWallet) { this.wallet = startingWallet; }
 
-        // 3. City economies contribute to the total prompt value
-        // Richer cities increase demand
-        double cityWealth = 0;
-        for (City city : world.getAllCities()) {
-            cityWealth += city.getTreasury();
+        public double  getWallet()           { return wallet; }
+        public int     getAllocatedPrompts()  { return allocatedPrompts; }
+        public int     getPromptsServed()    { return promptsServed; }
+        public boolean isInDebt()            { return inDebt; }
+
+        public void earn(double amount) {
+            wallet += amount;
+            totalEarnings += amount;
+            inDebt = wallet < 0;
         }
 
-        // Adjust total prompt value based on city wealth (dynamic economy)
-        // Base value + city contribution
-        double dynamicValue = EconomyConfig.TOTAL_PROMPT_VALUE
-                + (cityWealth * 0.01);
-        // This doesn't mutate the config, just affects this tick's calculations
+        public void spend(double amount) {
+            wallet -= amount;
+            totalSpending += amount;
+            inDebt = wallet < 0;
+        }
 
-        System.out.println("[ECON] Tick " + tickNumber
-                + " | Price: " + String.format("%.2f", promptMarket.getPrice())
-                + " | Demand: " + promptMarket.getCurrentDemand()
-                + " | Agents: " + agentEconomies.size());
+        public void setAllocatedPrompts(int n) { allocatedPrompts = n; }
+        public void setPromptsServed(int n)    { promptsServed = n; }
+
+        public Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("wallet",            r2(wallet));
+            m.put("allocated_prompts", allocatedPrompts);
+            m.put("prompts_served",    promptsServed);
+            m.put("total_earnings",    r2(totalEarnings));
+            m.put("total_spending",    r2(totalSpending));
+            m.put("in_debt",           inDebt);
+            return m;
+        }
+
+        private static double r2(double v) { return Math.round(v * 100.0) / 100.0; }
     }
 
-    // ---- Accessors ----
+    private final Map<String, AgentEconomy> agentEconomies = new LinkedHashMap<>();
+    private final Map<String, double[]>     bids           = new LinkedHashMap<>();
 
-    public PromptMarket getPromptMarket() { return promptMarket; }
-
-    public AgentEconomy getAgentEconomy(String agentId) {
-        return agentEconomies.get(agentId);
+    public void registerAgent(String id, double startingWallet) {
+        agentEconomies.put(id, new AgentEconomy(startingWallet));
     }
 
-    public Map<String, AgentEconomy> getAllAgentEconomies() {
-        return Collections.unmodifiableMap(agentEconomies);
+    public AgentEconomy getAgentEconomy(String id) {
+        return agentEconomies.get(id);
     }
 
-    public PriceHistory getPriceHistory() { return priceHistory; }
+    public void placeBid(String agentId, double price, int quantity) {
+        bids.put(agentId, new double[]{price, quantity});
+    }
+
+    /** Run one tick of the prompt economy. */
+    public void tick() {
+        // 1. Simulate demand (humans prompting)
+        int baseDemand = (int) (TOTAL_PROMPT_VALUE / Math.max(0.01, promptPrice));
+        int noise      = rng.nextInt(Math.max(1, baseDemand / 5)) - baseDemand / 10;
+        currentDemand  = Math.max(10, baseDemand + noise);
+
+        // 2. Total supply from bids
+        int totalBidQty   = 0;
+        double totalBidVal = 0;
+        for (double[] bid : bids.values()) {
+            totalBidQty += (int) bid[1];
+            totalBidVal += bid[0] * bid[1];
+        }
+        totalSupply = Math.max(1, totalBidQty);
+
+        // 3. Allocate prompts
+        if (bids.isEmpty()) {
+            // Default: split evenly
+            int perAgent = currentDemand / Math.max(1, agentEconomies.size());
+            for (AgentEconomy econ : agentEconomies.values()) {
+                econ.setAllocatedPrompts(perAgent);
+                int served = Math.min(perAgent, currentDemand / Math.max(1, agentEconomies.size()));
+                econ.setPromptsServed(served);
+                econ.earn(served * promptPrice * 0.8);
+            }
+        } else {
+            for (Map.Entry<String, double[]> bid : bids.entrySet()) {
+                AgentEconomy econ = agentEconomies.get(bid.getKey());
+                if (econ == null) continue;
+
+                double bidPrice = bid.getValue()[0];
+                int    bidQty   = (int) bid.getValue()[1];
+                double share    = totalBidVal > 0 ? (bidPrice * bidQty) / totalBidVal : 0;
+                int    allocated = (int) (currentDemand * share);
+                int    served    = Math.min(allocated, bidQty);
+
+                econ.setAllocatedPrompts(allocated);
+                econ.setPromptsServed(served);
+                econ.earn(served * promptPrice);
+                econ.spend(bidPrice * bidQty * 0.1); // 10% bid cost
+            }
+
+            // Agents who didn't bid get nothing
+            for (Map.Entry<String, AgentEconomy> e : agentEconomies.entrySet()) {
+                if (!bids.containsKey(e.getKey())) {
+                    e.getValue().setAllocatedPrompts(0);
+                    e.getValue().setPromptsServed(0);
+                }
+            }
+        }
+
+        // 4. Update price
+        double ratio = (double) currentDemand / Math.max(1, totalSupply);
+        double priceShift = (ratio - 1.0) * 0.05 + rng.nextGaussian() * 0.01;
+        promptPrice = Math.max(0.01, promptPrice * (1.0 + priceShift));
+
+        openOrders = bids.size();
+        bids.clear();
+    }
 
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("market", promptMarket.toMap());
-        m.put("price_history", priceHistory.toList());
+
+        Map<String, Object> market = new LinkedHashMap<>();
+        market.put("price",              Math.round(promptPrice * 100.0) / 100.0);
+        market.put("total_supply",       totalSupply);
+        market.put("current_demand",     currentDemand);
+        market.put("total_market_value", TOTAL_PROMPT_VALUE);
+        market.put("open_orders",        openOrders);
+        m.put("market", market);
 
         Map<String, Object> agents = new LinkedHashMap<>();
-        for (AgentEconomy ae : agentEconomies.values()) {
-            agents.put(ae.getAgentId(), ae.toMap());
+        for (Map.Entry<String, AgentEconomy> e : agentEconomies.entrySet()) {
+            agents.put(e.getKey(), e.getValue().toMap());
         }
         m.put("agents", agents);
+
         return m;
     }
+
+    public double getPromptPrice()  { return promptPrice; }
+    public int    getTotalSupply()  { return totalSupply; }
+    public int    getCurrentDemand() { return currentDemand; }
 }

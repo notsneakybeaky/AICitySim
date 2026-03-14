@@ -1,104 +1,41 @@
 package com.hyperinflation.world;
 
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import com.hyperinflation.world.City;
 
-/**
- * The world container. Holds all cities, regions, the map, and agents.
- * This is the single source of truth for the simulation state.
- */
+import java.util.*;
+
 public final class World {
 
-    private final WorldMap map;
-    private final Map<String, City> cities = new ConcurrentHashMap<>();
-    private final Map<String, Region> regions = new ConcurrentHashMap<>();
-    private int tickCount = 0;
+    private final Map<String, City> cities = new LinkedHashMap<>();
 
-    public World(int mapWidth, int mapHeight) {
-        this.map = new WorldMap(mapWidth, mapHeight);
+    public World() {
+        cities.put("nexus",    new City("nexus",    "Nexus Prime", "alpha", 12, 8,
+                500_000, 70, 75, 0.12));
+        cities.put("ironhold", new City("ironhold", "Ironhold",    "alpha",  6, 14,
+                320_000, 55, 80, 0.15));
+        cities.put("freeport", new City("freeport", "Freeport",    "beta",  20,  5,
+                250_000, 65, 60, 0.08));
+        cities.put("eden",     new City("eden",     "New Eden",    "beta",  18, 18,
+                180_000, 80, 50, 0.10));
+        cities.put("vault",    new City("vault",    "The Vault",   "gamma",  3,  3,
+                150_000, 60, 90, 0.20));
     }
 
-    // ---- City management ----
+    public City                       getCity(String id) { return cities.get(id); }
+    public Map<String, City>          getCities()        { return Collections.unmodifiableMap(cities); }
+    public Collection<City>           allCities()        { return cities.values(); }
 
-    public void addCity(City city) {
-        cities.put(city.getId(), city);
-        // Claim surrounding tiles
-        map.claimRadius(city.getId(), city.getTileX(), city.getTileY(), 3);
-        // Set city tile to URBAN
-        Tile centerTile = map.getTile(city.getTileX(), city.getTileY());
-        if (centerTile != null) centerTile.setTerrain(Tile.Terrain.URBAN);
-    }
-
-    public City getCity(String id) {
-        return cities.get(id);
-    }
-
-    public Collection<City> getAllCities() {
-        return Collections.unmodifiableCollection(cities.values());
-    }
-
-    public City getRandomCity() {
-        List<City> list = new ArrayList<>(cities.values());
-        if (list.isEmpty()) return null;
-        return list.get(new Random().nextInt(list.size()));
-    }
-
-    // ---- Region management ----
-
-    public void addRegion(Region region) {
-        regions.put(region.getId(), region);
-    }
-
-    public Region getRegion(String id) {
-        return regions.get(id);
-    }
-
-    // ---- Simulation ----
-
-    public void simulateTick() {
-        tickCount++;
-        for (City city : cities.values()) {
-            city.simulateTick();
-        }
-    }
-
-    // ---- Serialization ----
-
-    public Map<String, Object> toSummaryMap() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("tick",        tickCount);
-        m.put("city_count",  cities.size());
-        m.put("map",         map.toSummaryMap());
-
-        long totalPop = cities.values().stream().mapToLong(City::getPopulation).sum();
-        double totalGdp = cities.values().stream().mapToDouble(City::getEconomicOutput).sum();
-        m.put("total_population",     totalPop);
-        m.put("total_economic_output", Math.round(totalGdp * 100.0) / 100.0);
-        return m;
+    public void tickAll() {
+        for (City c : cities.values()) c.tick();
     }
 
     public Map<String, Object> toFullMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("tick",    tickCount);
-        m.put("map",     map.toSummaryMap());
-
-        // Cities
-        Map<String, Object> cityMap = new LinkedHashMap<>();
-        for (City c : cities.values()) {
-            cityMap.put(c.getId(), c.toMap());
+        Map<String, Object> citiesMap = new LinkedHashMap<>();
+        for (Map.Entry<String, City> e : cities.entrySet()) {
+            citiesMap.put(e.getKey(), e.getValue().toMap());
         }
-        m.put("cities", cityMap);
-
-        // Regions
-        Map<String, Object> regionMap = new LinkedHashMap<>();
-        for (Region r : regions.values()) {
-            regionMap.put(r.getId(), r.toMap());
-        }
-        m.put("regions", regionMap);
-
+        m.put("cities", citiesMap);
         return m;
     }
-
-    public WorldMap getMap()  { return map; }
-    public int getTickCount() { return tickCount; }
 }

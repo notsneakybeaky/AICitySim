@@ -1,42 +1,65 @@
 package com.hyperinflation.agent;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 
-/**
- * A fully-featured agent with personality, memory, and economic state.
- */
 public final class Agent {
 
-    private final AgentPersonality personality;
-    private final AgentMemory memory;
+    // ---- Inner: Personality ----
+    public static final class Personality {
+        public final String name;
+        public final String description;
+        public final String priorities;
+        public final double aggression;
+        public final double riskTolerance;
+        public final double cooperation;
 
-    // Runtime state
-    private boolean alive;
+        public Personality(String name, String description, String priorities,
+                           double aggression, double riskTolerance, double cooperation) {
+            this.name          = name;
+            this.description   = description;
+            this.priorities    = priorities;
+            this.aggression    = aggression;
+            this.riskTolerance = riskTolerance;
+            this.cooperation   = cooperation;
+        }
+    }
 
-    public Agent(AgentPersonality personality) {
+    // ---- Inner: Memory ----
+    public static final class Memory {
+        private final List<String> entries = new ArrayList<>();
+        private static final int MAX = 50;
+
+        public void record(String entry) {
+            entries.add(entry);
+            if (entries.size() > MAX) entries.remove(0);
+        }
+
+        public String buildTacticalSummary() {
+            if (entries.isEmpty()) return "No prior actions or observations.";
+            int start = Math.max(0, entries.size() - 15);
+            StringBuilder sb = new StringBuilder();
+            for (int i = start; i < entries.size(); i++) {
+                sb.append("- ").append(entries.get(i)).append("\n");
+            }
+            return sb.toString();
+        }
+    }
+
+    private final String      id;
+    private final Personality  personality;
+    private final Memory       memory;
+    private boolean            alive;
+
+    public Agent(String id, Personality personality) {
+        this.id          = id;
         this.personality = personality;
-        this.memory      = new AgentMemory(50); // Remember last 50 actions
+        this.memory      = new Memory();
         this.alive       = true;
     }
 
-    public String           getId()          { return personality.id; }
-    public AgentPersonality getPersonality() { return personality; }
-    public AgentMemory      getMemory()      { return memory; }
-    public boolean          isAlive()        { return alive; }
-    public void             kill()           { this.alive = false; }
-
-    public Map<String, Object> toMap() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id",             personality.id);
-        m.put("name",           personality.name);
-        m.put("description",    personality.description);
-        m.put("priorities",     personality.priorities);
-        m.put("aggression",     personality.aggression);
-        m.put("risk_tolerance", personality.riskTolerance);
-        m.put("cooperation",    personality.cooperation);
-        m.put("alive",          alive);
-        m.put("memory_size",    memory.getSize());
-        return m;
-    }
+    public String      getId()          { return id; }
+    public Personality  getPersonality() { return personality; }
+    public Memory       getMemory()      { return memory; }
+    public boolean      isAlive()        { return alive; }
+    public void         kill()           { alive = false; }
 }
