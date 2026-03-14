@@ -12,19 +12,19 @@ netty/.gradle/
 netty/build/
 netty/out/
 netty/bin/
-netty/*.class
-netty/*.log
-# Ignore all JARs EXCEPT the Gradle wrapper (crucial for sharing the repo)
-netty/*.jar
-!gradle/wrapper/gradle-wrapper.jar
+netty/**/*.class
+netty/**/*.log
+# Ignore all JARs EXCEPT the Gradle wrapper
+netty/**/*.jar
 !netty/gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
 
 # =========================
 # Python (AI Service)
 # =========================
 python/__pycache__/
-python/*.py[cod]
-python/*$py.class
+python/**/*.py[cod]
+python/**/*$py.class
 python/.venv/
 python/env/
 python/.env
@@ -33,7 +33,9 @@ python/.pytest_cache/
 # =========================
 # Flutter / Dart (Dashboard)
 # =========================
+flutter/build/
 flutter/.dart_tool/
+flutter/.metadata
 flutter/.packages
 flutter/.flutter-plugins
 flutter/.flutter-plugins-dependencies
