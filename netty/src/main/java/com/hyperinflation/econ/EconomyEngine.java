@@ -4,68 +4,19 @@ import java.util.*;
 
 public final class EconomyEngine {
 
-    // =====================================================================
-    //  CONFIGURABLE — "The current prompt total value is set to 1000"
-    // =====================================================================
     public static double TOTAL_PROMPT_VALUE = 1000.0;
 
-    private double promptPrice   = 1.0;
-    private int    totalSupply   = 1000;
+    private double promptPrice   = EconomyConfig.INITIAL_PROMPT_PRICE;
+    private int    totalSupply   = EconomyConfig.TOTAL_PROMPT_SUPPLY;
     private int    currentDemand = 0;
     private int    openOrders    = 0;
     private final Random rng     = new Random();
-
-    // ---- Per-agent economy ----
-
-    public static final class AgentEconomy {
-        private double  wallet;
-        private int     allocatedPrompts;
-        private int     promptsServed;
-        private double  totalEarnings;
-        private double  totalSpending;
-        private boolean inDebt;
-
-        public AgentEconomy(double startingWallet) { this.wallet = startingWallet; }
-
-        public double  getWallet()           { return wallet; }
-        public int     getAllocatedPrompts()  { return allocatedPrompts; }
-        public int     getPromptsServed()    { return promptsServed; }
-        public boolean isInDebt()            { return inDebt; }
-
-        public void earn(double amount) {
-            wallet += amount;
-            totalEarnings += amount;
-            inDebt = wallet < 0;
-        }
-
-        public void spend(double amount) {
-            wallet -= amount;
-            totalSpending += amount;
-            inDebt = wallet < 0;
-        }
-
-        public void setAllocatedPrompts(int n) { allocatedPrompts = n; }
-        public void setPromptsServed(int n)    { promptsServed = n; }
-
-        public Map<String, Object> toMap() {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("wallet",            r2(wallet));
-            m.put("allocated_prompts", allocatedPrompts);
-            m.put("prompts_served",    promptsServed);
-            m.put("total_earnings",    r2(totalEarnings));
-            m.put("total_spending",    r2(totalSpending));
-            m.put("in_debt",           inDebt);
-            return m;
-        }
-
-        private static double r2(double v) { return Math.round(v * 100.0) / 100.0; }
-    }
 
     private final Map<String, AgentEconomy> agentEconomies = new LinkedHashMap<>();
     private final Map<String, double[]>     bids           = new LinkedHashMap<>();
 
     public void registerAgent(String id, double startingWallet) {
-        agentEconomies.put(id, new AgentEconomy(startingWallet));
+        agentEconomies.put(id, new AgentEconomy(id, startingWallet));
     }
 
     public AgentEconomy getAgentEconomy(String id) {
@@ -84,7 +35,7 @@ public final class EconomyEngine {
         currentDemand  = Math.max(10, baseDemand + noise);
 
         // 2. Total supply from bids
-        int totalBidQty   = 0;
+        int    totalBidQty = 0;
         double totalBidVal = 0;
         for (double[] bid : bids.values()) {
             totalBidQty += (int) bid[1];
@@ -98,28 +49,28 @@ public final class EconomyEngine {
             int perAgent = currentDemand / Math.max(1, agentEconomies.size());
             for (AgentEconomy econ : agentEconomies.values()) {
                 econ.setAllocatedPrompts(perAgent);
-                int served = Math.min(perAgent, currentDemand / Math.max(1, agentEconomies.size()));
-                econ.setPromptsServed(served);
-                econ.earn(served * promptPrice * 0.8);
+                econ.setPromptsServed(perAgent);
+                econ.earn(perAgent * promptPrice * 0.8);
             }
         } else {
             for (Map.Entry<String, double[]> bid : bids.entrySet()) {
                 AgentEconomy econ = agentEconomies.get(bid.getKey());
                 if (econ == null) continue;
 
-                double bidPrice = bid.getValue()[0];
-                int    bidQty   = (int) bid.getValue()[1];
-                double share    = totalBidVal > 0 ? (bidPrice * bidQty) / totalBidVal : 0;
+                double bidPrice  = bid.getValue()[0];
+                int    bidQty    = (int) bid.getValue()[1];
+                double share     = totalBidVal > 0 ? (bidPrice * bidQty) / totalBidVal : 0;
                 int    allocated = (int) (currentDemand * share);
                 int    served    = Math.min(allocated, bidQty);
 
                 econ.setAllocatedPrompts(allocated);
                 econ.setPromptsServed(served);
                 econ.earn(served * promptPrice);
-                econ.spend(bidPrice * bidQty * 0.1); // 10% bid cost
+                // 10% bid cost — force spend even if wallet is low (bid is a commitment)
+                econ.forceSpend(bidPrice * bidQty * 0.1);
             }
 
-            // Agents who didn't bid get nothing
+            // Agents who didn't bid get nothing this tick
             for (Map.Entry<String, AgentEconomy> e : agentEconomies.entrySet()) {
                 if (!bids.containsKey(e.getKey())) {
                     e.getValue().setAllocatedPrompts(0);
@@ -129,9 +80,9 @@ public final class EconomyEngine {
         }
 
         // 4. Update price
-        double ratio = (double) currentDemand / Math.max(1, totalSupply);
+        double ratio      = (double) currentDemand / Math.max(1, totalSupply);
         double priceShift = (ratio - 1.0) * 0.05 + rng.nextGaussian() * 0.01;
-        promptPrice = Math.max(0.01, promptPrice * (1.0 + priceShift));
+        promptPrice       = Math.max(0.01, promptPrice * (1.0 + priceShift));
 
         openOrders = bids.size();
         bids.clear();
@@ -157,7 +108,7 @@ public final class EconomyEngine {
         return m;
     }
 
-    public double getPromptPrice()  { return promptPrice; }
-    public int    getTotalSupply()  { return totalSupply; }
+    public double getPromptPrice()   { return promptPrice; }
+    public int    getTotalSupply()   { return totalSupply; }
     public int    getCurrentDemand() { return currentDemand; }
 }

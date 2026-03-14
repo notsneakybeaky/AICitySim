@@ -3,6 +3,7 @@ package com.hyperinflation.core;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hyperinflation.agent.Agent;
 import com.hyperinflation.ai.PythonAiClient;
+import com.hyperinflation.econ.AgentEconomy;
 import com.hyperinflation.econ.EconomyEngine;
 import com.hyperinflation.world.World;
 import io.netty.channel.Channel;
@@ -30,11 +31,11 @@ public final class WorldEngine {
                 return t;
             });
 
-    private final PythonAiClient aiClient;
-    private final World world;
-    private final EconomyEngine economy;
-    private final List<main.core.Agent>       agents;
-    private final ActionProcessor   actionProcessor;
+    private final PythonAiClient  aiClient;
+    private final World           world;
+    private final EconomyEngine   economy;
+    private final List<Agent>     agents;
+    private final ActionProcessor actionProcessor;
 
     // ---- State ----
     private int   currentTick = 0;
@@ -144,7 +145,7 @@ public final class WorldEngine {
         for (Agent agent : agents) {
             if (!agent.isAlive()) continue;
 
-            EconomyEngine.AgentEconomy agentEcon = economy.getAgentEconomy(agent.getId());
+            AgentEconomy agentEcon = economy.getAgentEconomy(agent.getId());
 
             CompletableFuture<List<Action>> f = aiClient
                     .requestTurnAsync(agent, agentEcon, world, economy, agents, currentTick)
@@ -184,7 +185,7 @@ public final class WorldEngine {
                     Agent agent = findAgent(action.getAgentId());
                     if (agent != null) {
                         String mem = "Tick " + currentTick + ": " + action.getType().name();
-                        if (action.getTargetId() != null) mem += " → " + action.getTargetId();
+                        if (action.getTargetId() != null) mem += " -> " + action.getTargetId();
                         agent.getMemory().record(mem);
                     }
                 }
@@ -201,7 +202,7 @@ public final class WorldEngine {
 
         // Memory: record economic results
         for (Agent agent : agents) {
-            EconomyEngine.AgentEconomy econ = economy.getAgentEconomy(agent.getId());
+            AgentEconomy econ = economy.getAgentEconomy(agent.getId());
             if (econ != null) {
                 agent.getMemory().record(
                         "Tick " + currentTick + " result: wallet=$"

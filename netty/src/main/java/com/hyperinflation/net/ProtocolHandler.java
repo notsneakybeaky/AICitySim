@@ -1,6 +1,6 @@
 package com.hyperinflation.net;
 
-import com.hyperinflation.core.SimulationEngine;
+import com.hyperinflation.core.WorldEngine;
 import com.hyperinflation.net.protocol.*;
 import com.hyperinflation.net.protocol.c2s.*;
 import com.hyperinflation.net.protocol.s2c.*;
@@ -9,6 +9,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,12 +19,8 @@ import java.util.Map;
 public class ProtocolHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
 
     private final ConnectionManager connectionManager;
-    private final SimulationEngine engine;
-
-    public ProtocolHandler(ConnectionManager connectionManager, SimulationEngine engine) {
-        this.connectionManager = connectionManager;
-        this.engine            = engine;
-    }
+    private final WorldEngine engine;
+    public ProtocolHandler(ConnectionManager connectionManager, WorldEngine engine) { this.connectionManager = connectionManager; this.engine = engine; }
 
     @Override
     public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
@@ -92,7 +89,7 @@ public class ProtocolHandler extends SimpleChannelInboundHandler<TextWebSocketFr
                 conn.getClientId(),
                 newState.name(),
                 engine.getCurrentTick(),
-                engine.getRegistry().getActiveIds()
+                List.of("world", "economy")  // hardcode since WorldEngine has no registry
         );
         conn.sendPacket(ack);
 
@@ -100,7 +97,7 @@ public class ProtocolHandler extends SimpleChannelInboundHandler<TextWebSocketFr
         S2CWorldSnapshot snapshot = new S2CWorldSnapshot(
                 engine.getCurrentTick(),
                 engine.getWorld().toFullMap(),
-                Map.of() // Economy data will come from the economy engine
+                engine.getEconomy().toMap()  // was Map.of()
         );
         conn.sendPacket(snapshot);
     }
@@ -110,14 +107,7 @@ public class ProtocolHandler extends SimpleChannelInboundHandler<TextWebSocketFr
     }
 
     private void handleModuleSwitch(ClientConnection conn, C2SModuleSwitch moduleSwitch) {
-        if (conn.getState() != ConnectionState.PLAY) {
-            System.out.println("[PROTOCOL] Module switch denied: client is not in PLAY state.");
-            return;
-        }
-        String moduleId = moduleSwitch.targetModuleId();
-        System.out.println("[PROTOCOL] Module switch requested by " + conn.getClientId()
-                + " → " + moduleId);
-        engine.getRegistry().switchTo(moduleId);
+        System.out.println("[PROTOCOL] Module switch ignored - not supported.");
     }
 
     private void handlePlayerAction(ClientConnection conn, C2SPlayerAction action) {

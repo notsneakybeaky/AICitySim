@@ -1,5 +1,6 @@
 package com.hyperinflation.core;
 
+import com.hyperinflation.econ.AgentEconomy;
 import com.hyperinflation.econ.EconomyEngine;
 import com.hyperinflation.world.City;
 import com.hyperinflation.world.World;
@@ -8,7 +9,7 @@ import java.util.*;
 
 public final class ActionProcessor {
 
-    private final World world;
+    private final World         world;
     private final EconomyEngine economy;
     private final List<Map<String, Object>> events = new ArrayList<>();
 
@@ -23,16 +24,16 @@ public final class ActionProcessor {
     public void process(Action action) {
         if (action.getType() == Action.Type.NO_OP) return;
 
-        String agentId                   = action.getAgentId();
-        String targetId                  = action.getTargetId();
-        EconomyEngine.AgentEconomy econ  = agentId != null ? economy.getAgentEconomy(agentId) : null;
-        City city                        = targetId != null ? world.getCity(targetId) : null;
+        String       agentId  = action.getAgentId();
+        String       targetId = action.getTargetId();
+        AgentEconomy econ     = agentId != null ? economy.getAgentEconomy(agentId) : null;
+        City         city     = targetId != null ? world.getCity(targetId) : null;
 
         switch (action.getType()) {
 
             case PLACE_BID: {
                 double price = action.param("price", 1.0);
-                int qty      = (int) action.param("quantity", 10);
+                int    qty   = (int) action.param("quantity", 10);
                 economy.placeBid(agentId, price, qty);
                 event("BID", agentId, targetId,
                         agentId + " bid " + qty + " prompts @ $" + f(price));
@@ -43,7 +44,12 @@ public final class ActionProcessor {
                 if (city == null) break;
                 double amt  = action.param("amount", 5.0);
                 double cost = amt * 2.0;
-                if (econ != null) econ.spend(cost);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford BUILD in " + city.getName()
+                                    + " (need $" + f(cost) + ", have $" + f(econ.getWallet()) + ")");
+                    break;
+                }
                 city.adjustInfrastructure(amt);
                 event("BUILD", agentId, targetId,
                         agentId + " built +" + f(amt) + " infra in " + city.getName()
@@ -64,7 +70,11 @@ public final class ActionProcessor {
                 if (city == null) break;
                 double amt  = action.param("amount", 5.0);
                 double cost = amt * 1.5;
-                if (econ != null) econ.spend(cost);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford BOOST in " + city.getName());
+                    break;
+                }
                 city.adjustHappiness(amt);
                 event("BOOST", agentId, targetId,
                         agentId + " boosted happiness in " + city.getName()
@@ -85,11 +95,16 @@ public final class ActionProcessor {
                 if (city == null) break;
                 double power = action.param("power", 10.0);
                 double cost  = power * 3.0;
-                if (econ != null) econ.spend(cost);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford ATTACK on " + city.getName());
+                    break;
+                }
                 double effective = city.receiveAttack(power);
                 event("ATTACK", agentId, targetId,
                         agentId + " attacked " + city.getName()
-                                + " (pow=" + f(power) + " eff=" + f(effective) + " -$" + f(cost) + ")");
+                                + " (pow=" + f(power) + " eff=" + f(effective)
+                                + " -$" + f(cost) + ")");
                 break;
             }
 
@@ -97,7 +112,11 @@ public final class ActionProcessor {
                 if (city == null) break;
                 double amt  = action.param("amount", 5.0);
                 double cost = amt * 1.5;
-                if (econ != null) econ.spend(cost);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford DEFEND in " + city.getName());
+                    break;
+                }
                 city.adjustDefenses(amt);
                 event("DEFEND", agentId, targetId,
                         agentId + " fortified " + city.getName() + " +" + f(amt));
@@ -137,7 +156,11 @@ public final class ActionProcessor {
             case INJECT_CAPITAL: {
                 if (city == null) break;
                 double amt = action.param("amount", 10.0);
-                if (econ != null) econ.spend(amt);
+                if (econ != null && !econ.spend(amt)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford INJECT into " + city.getName());
+                    break;
+                }
                 city.adjustTreasury(amt);
                 event("INJECT", agentId, targetId,
                         agentId + " injected $" + f(amt) + " into " + city.getName());

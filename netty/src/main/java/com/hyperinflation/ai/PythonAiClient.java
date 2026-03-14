@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hyperinflation.agent.Agent;
 import com.hyperinflation.core.Action;
+import com.hyperinflation.econ.AgentEconomy;
 import com.hyperinflation.econ.EconomyEngine;
 import com.hyperinflation.world.World;
 
@@ -35,7 +36,7 @@ public final class PythonAiClient {
 
     public CompletableFuture<List<Action>> requestTurnAsync(
             Agent agent,
-            EconomyEngine.AgentEconomy agentEcon,
+            AgentEconomy agentEcon,
             World world,
             EconomyEngine economy,
             List<Agent> allAgents,
@@ -73,7 +74,7 @@ public final class PythonAiClient {
             info.put("id",    other.getId());
             info.put("name",  other.getPersonality().name);
             info.put("alive", other.isAlive());
-            EconomyEngine.AgentEconomy otherEcon = economy.getAgentEconomy(other.getId());
+            AgentEconomy otherEcon = economy.getAgentEconomy(other.getId());
             if (otherEcon != null) {
                 info.put("wallet",            otherEcon.getWallet());
                 info.put("allocated_prompts", otherEcon.getAllocatedPrompts());

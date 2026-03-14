@@ -1,7 +1,7 @@
 package com.hyperinflation.net;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hyperinflation.core.SimulationEngine;
+import com.hyperinflation.core.WorldEngine;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
@@ -17,11 +17,8 @@ import java.util.Map;
 public class HttpApiHandler extends ChannelInboundHandlerAdapter {
 
     private final ObjectMapper mapper = new ObjectMapper();
-    private final SimulationEngine engine;
-
-    public HttpApiHandler(SimulationEngine engine) {
-        this.engine = engine;
-    }
+    private final WorldEngine engine;
+    public HttpApiHandler(WorldEngine engine) { this.engine = engine; }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
@@ -52,49 +49,20 @@ public class HttpApiHandler extends ChannelInboundHandlerAdapter {
                                 mapper.writeValueAsString(engine.getWorld().toFullMap()));
 
                 case "/api/economy" ->
-                        sendJson(ctx, HttpResponseStatus.OK, "{}"); // TODO: wire to economy engine
+                        sendJson(ctx, HttpResponseStatus.OK,
+                                mapper.writeValueAsString(engine.getEconomy().toMap())); // TODO: wire to economy engine
 
                 case "/api/status" -> {
                     Map<String, Object> status = new LinkedHashMap<>();
-                    status.put("phase",          engine.getPhase().name());
-                    status.put("current_tick",   engine.getCurrentTick());
-                    status.put("running",        engine.isRunning());
-                    status.put("tick_interval",  engine.getTickInterval());
-                    status.put("active_modules", engine.getRegistry().getActiveIds());
-                    status.put("all_modules",    engine.getRegistry().getRegisteredIds());
-                    status.put("ts",             System.currentTimeMillis());
-                    sendJson(ctx, HttpResponseStatus.OK,
-                            mapper.writeValueAsString(status));
+                    status.put("phase",        engine.getPhase()); // already returns String
+                    status.put("current_tick", engine.getCurrentTick());
+                    status.put("ts",           System.currentTimeMillis());
+                    sendJson(ctx, HttpResponseStatus.OK, mapper.writeValueAsString(status));
                 }
 
-                case "/api/modules" ->
-                        sendJson(ctx, HttpResponseStatus.OK,
-                                mapper.writeValueAsString(Map.of(
-                                        "registered", engine.getRegistry().getRegisteredIds(),
-                                        "active",     engine.getRegistry().getActiveIds()
-                                )));
-
-                case "/api/modules/switch" -> {
-                    if (req.method() != HttpMethod.POST) {
-                        sendJson(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED,
-                                "{\"error\":\"POST only\"}");
-                        return;
-                    }
-                    String body = req.content().toString(CharsetUtil.UTF_8);
-                    @SuppressWarnings("unchecked")
-                    Map<String, String> parsed = mapper.readValue(body, Map.class);
-                    String moduleId = parsed.get("module_id");
-                    boolean success = engine.getRegistry().switchTo(moduleId);
-                    sendJson(ctx, success ? HttpResponseStatus.OK : HttpResponseStatus.BAD_REQUEST,
-                            mapper.writeValueAsString(Map.of(
-                                    "success", success,
-                                    "active",  engine.getRegistry().getActiveIds()
-                            )));
-                }
-
-                case "/api/events" ->
-                        sendJson(ctx, HttpResponseStatus.OK,
-                                mapper.writeValueAsString(engine.getEventLog()));
+                case "/api/modules", "/api/modules/switch", "/api/events" ->
+                        sendJson(ctx, HttpResponseStatus.NOT_FOUND,
+                                "{\"error\":\"not implemented\"}");
 
                 default ->
                         sendJson(ctx, HttpResponseStatus.NOT_FOUND,

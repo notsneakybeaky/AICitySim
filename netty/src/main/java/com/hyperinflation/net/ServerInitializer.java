@@ -1,6 +1,6 @@
 package com.hyperinflation.net;
 
-import com.hyperinflation.core.SimulationEngine;
+import com.hyperinflation.core.WorldEngine;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.socket.SocketChannel;
@@ -13,13 +13,11 @@ import java.util.concurrent.TimeUnit;
 
 public class ServerInitializer extends ChannelInitializer<SocketChannel> {
 
-    private final SimulationEngine engine;
+    private final WorldEngine engine;
     private final ConnectionManager connectionManager;
 
-    public ServerInitializer(SimulationEngine engine, ConnectionManager connectionManager) {
-        this.engine            = engine;
-        this.connectionManager = connectionManager;
-    }
+    public ServerInitializer(WorldEngine engine, ConnectionManager connectionManager) {this.connectionManager = connectionManager; this.engine = engine; }
+
 
     @Override
     protected void initChannel(SocketChannel ch) {
