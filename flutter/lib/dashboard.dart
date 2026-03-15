@@ -57,6 +57,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
   Map<String, City> _cities = {};
   EconomyState _economy = EconomyState();
   List<EventEntry> _events = [];
+  List<double> _priceHistory = [];
   Map<String, String> _agentLocations = {}, _agentThoughts = {};
   Map<String, int> _territory = {};
   GridSnapshot _grid = GridSnapshot(width: 25, height: 22, terrain: '', owners: '');
@@ -117,7 +118,13 @@ class _WorldDashboardState extends State<WorldDashboard> {
     // Territory counts
     final t = w['territory']; if (t is Map<String, dynamic>) _territory = t.map((k, v) => MapEntry(k, (v is num) ? v.toInt() : 0));
   }
-  void _parseEconomy(dynamic d) { if (d is Map<String, dynamic>) _economy = EconomyState.fromJson(d); }
+  void _parseEconomy(dynamic d) {
+    if (d is Map<String, dynamic>) {
+      _economy = EconomyState.fromJson(d);
+      _priceHistory.add(_economy.promptPrice);
+      if (_priceHistory.length > 100) _priceHistory = _priceHistory.sublist(_priceHistory.length - 100);
+    }
+  }
   void _parseEvents(dynamic d) { if (d is List) _events = d.whereType<Map<String, dynamic>>().map((e) => EventEntry.fromJson(e)).toList(); }
   void _parseLoc(dynamic d) { if (d is Map<String, dynamic>) _agentLocations = d.map((k, v) => MapEntry(k, v.toString())); }
 
@@ -136,10 +143,10 @@ class _WorldDashboardState extends State<WorldDashboard> {
               child: WorldRenderPanel(cities: _cities, events: _events, grid: _grid,
                   tick: _tick, phase: _phase, narration: _narration,
                   agentLocations: _agentLocations, territory: _territory))),
-          SizedBox(height: 120, child: _agentStrip()),
+          SizedBox(height: 140, child: _agentStrip()),
         ])),
-        // RIGHT: Event feed
-        SizedBox(width: 320, child: _eventPanel()),
+        // RIGHT: Leaderboard + Chart + AI Thoughts + Events
+        SizedBox(width: 380, child: _rightPanel()),
       ])),
     ]));
   }
@@ -184,27 +191,34 @@ class _WorldDashboardState extends State<WorldDashboard> {
   ]);
 
   // ==================================================================
-  //  AGENT STRIP — horizontal cards at bottom
+  //  AGENT STRIP — horizontal cards showing AI thinking
   // ==================================================================
 
   Widget _agentStrip() {
     if (_economy.agentEconomies.isEmpty) return const SizedBox();
+    // Sort by wallet descending — show who's winning
+    final sorted = _economy.agentEconomies.entries.toList()
+      ..sort((a, b) => b.value.wallet.compareTo(a.value.wallet));
     return ListView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-      children: _economy.agentEconomies.entries.map((e) => _agentCard(e.key, e.value)).toList(),
+      children: [
+        for (int i = 0; i < sorted.length; i++)
+          _agentCard(sorted[i].key, sorted[i].value, rank: i + 1),
+      ],
     );
   }
 
-  Widget _agentCard(String id, AgentEconomy econ) {
+  Widget _agentCard(String id, AgentEconomy econ, {required int rank}) {
     final color = Noir.agent(id);
     final name = agentNames[id] ?? id;
     final loc = _agentLocations[id];
     final thought = _agentThoughts[id];
     final lastEvents = _events.where((e) => e.agent == id).take(3).toList();
+    final rankColor = rank == 1 ? Noir.amber : rank == 2 ? Noir.textMed : Noir.textLow;
 
     return Container(
-      width: 220, margin: const EdgeInsets.only(right: 8),
+      width: 250, margin: const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(econ.inDebt ? 0.06 : 0.04),
@@ -212,19 +226,26 @@ class _WorldDashboardState extends State<WorldDashboard> {
         border: Border.all(color: econ.inDebt ? Noir.rose.withOpacity(0.3) : color.withOpacity(0.15)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Name + wallet
+        // Name + rank + wallet
         Row(children: [
-          Container(width: 28, height: 28, decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(7), border: Border.all(color: color.withOpacity(0.3))),
-              child: Center(child: Text(name[0], style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 13)))),
-          const SizedBox(width: 8),
+          // Rank badge
+          Container(width: 18, height: 18, decoration: BoxDecoration(color: rankColor.withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
+              child: Center(child: Text('#$rank', style: TextStyle(color: rankColor, fontSize: 9, fontWeight: FontWeight.w800)))),
+          const SizedBox(width: 6),
+          Container(width: 24, height: 24, decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(6), border: Border.all(color: color.withOpacity(0.3))),
+              child: Center(child: Text(name[0], style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12)))),
+          const SizedBox(width: 6),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(name, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 11)),
-            if (loc != null) Text('📍 ${loc.toUpperCase()}', style: const TextStyle(color: Noir.textLow, fontSize: 8)),
+            if (loc != null) Text(loc.toUpperCase(), style: const TextStyle(color: Noir.textLow, fontSize: 7, letterSpacing: 0.5)),
           ])),
-          Text('\$${econ.wallet.toStringAsFixed(0)}', style: TextStyle(color: econ.inDebt ? Noir.rose : Noir.emerald, fontWeight: FontWeight.w800, fontSize: 14, fontFamily: 'JetBrains Mono')),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Text('\$${econ.wallet.toStringAsFixed(0)}', style: TextStyle(color: econ.inDebt ? Noir.rose : Noir.emerald, fontWeight: FontWeight.w800, fontSize: 14, fontFamily: 'JetBrains Mono')),
+            if (econ.inDebt) Text('DEBT', style: TextStyle(color: Noir.rose, fontSize: 7, fontWeight: FontWeight.w800)),
+          ]),
         ]),
         const SizedBox(height: 6),
-        // Recent actions
+        // Recent action chips
         if (lastEvents.isNotEmpty)
           Wrap(spacing: 4, runSpacing: 3, children: lastEvents.map((evt) {
             final def = ActionDef.fromType(evt.type);
@@ -232,42 +253,136 @@ class _WorldDashboardState extends State<WorldDashboard> {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(def.icon, color: def.color, size: 9), const SizedBox(width: 3),
                   Text(def.label, style: TextStyle(color: def.color, fontSize: 8, fontWeight: FontWeight.w700)),
+                  if (evt.target != null) ...[const SizedBox(width: 2), Text('→${evt.target}', style: TextStyle(color: def.color.withOpacity(0.5), fontSize: 7))],
                 ]));
-          }).toList())
-        else if (thought != null && thought.isNotEmpty)
-          Text(thought, style: TextStyle(color: Noir.textMed.withOpacity(0.7), fontSize: 9, fontStyle: FontStyle.italic), maxLines: 2, overflow: TextOverflow.ellipsis)
+          }).toList()),
+        const SizedBox(height: 4),
+        // AI THOUGHT — always visible, this is the key thing judges see
+        if (thought != null && thought.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(color: color.withOpacity(0.06), borderRadius: BorderRadius.circular(5), border: Border.all(color: color.withOpacity(0.1))),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(PhosphorIcons.brain(PhosphorIconsStyle.fill), color: color.withOpacity(0.5), size: 10),
+              const SizedBox(width: 5),
+              Expanded(child: Text('"$thought"', style: TextStyle(color: Noir.textMed, fontSize: 9, fontStyle: FontStyle.italic, height: 1.3), maxLines: 2, overflow: TextOverflow.ellipsis)),
+            ]),
+          )
         else
-          Text('Standing by...', style: TextStyle(color: Noir.textLow.withOpacity(0.5), fontSize: 9)),
+          Text('Thinking...', style: TextStyle(color: Noir.textLow.withOpacity(0.4), fontSize: 9, fontStyle: FontStyle.italic)),
       ]),
     );
   }
 
   // ==================================================================
-  //  EVENT PANEL — right sidebar
+  //  RIGHT PANEL — Leaderboard + Price Chart + Events
   // ==================================================================
 
-  Widget _eventPanel() {
+  Widget _rightPanel() {
     return Container(
       decoration: BoxDecoration(border: Border(left: BorderSide(color: Colors.white.withOpacity(0.04)))),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(10),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // ---- WALLET LEADERBOARD ----
+          _sectionHeader('LEADERBOARD', PhosphorIcons.trophy(PhosphorIconsStyle.fill), Noir.amber),
+          const SizedBox(height: 6),
+          _leaderboard(),
+          const SizedBox(height: 14),
+
+          // ---- PROMPT PRICE CHART ----
+          if (_priceHistory.length >= 2) ...[
+            _sectionHeader('PROMPT PRICE', PhosphorIcons.chartLineUp(PhosphorIconsStyle.fill), Noir.emerald),
+            const SizedBox(height: 6),
+            Container(
+              height: 100,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(8)),
+              child: CustomPaint(size: const Size(double.infinity, 84), painter: _PriceChartPainter(_priceHistory)),
+            ),
+            const SizedBox(height: 14),
+          ],
+
+          // ---- MARKET STATS ----
+          _sectionHeader('MARKET', PhosphorIcons.storefront(PhosphorIconsStyle.fill), Noir.cyan),
+          const SizedBox(height: 6),
+          _marketRow('Price', '\$${_economy.promptPrice.toStringAsFixed(2)}', Noir.emerald),
+          _marketRow('Demand', '${_economy.currentDemand}', Noir.cyan),
+          _marketRow('Supply', '${_economy.totalSupply}', Noir.textMed),
+          _marketRow('Open Orders', '${_economy.openOrders}', Noir.textLow),
+          const SizedBox(height: 14),
+
+          // ---- EVENTS ----
+          _sectionHeader('EVENTS • TICK $_tick', PhosphorIcons.lightning(PhosphorIconsStyle.fill), Noir.amber),
+          const SizedBox(height: 6),
+          if (_events.isEmpty)
+            Padding(padding: const EdgeInsets.symmetric(vertical: 12), child: Text('Waiting for actions...', style: TextStyle(color: Noir.textMute, fontSize: 10)))
+          else
+            ..._events.map((evt) => _eventTile(evt)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _leaderboard() {
+    if (_economy.agentEconomies.isEmpty) return Text('No data yet', style: TextStyle(color: Noir.textMute, fontSize: 10));
+    final sorted = _economy.agentEconomies.entries.toList()
+      ..sort((a, b) => b.value.wallet.compareTo(a.value.wallet));
+    final topWallet = sorted.first.value.wallet.abs().clamp(1.0, double.infinity);
+
+    return Column(children: [
+      for (int i = 0; i < sorted.length; i++) ...[
+        _leaderboardRow(sorted[i].key, sorted[i].value, i + 1, topWallet),
+        if (i < sorted.length - 1) const SizedBox(height: 3),
+      ],
+    ]);
+  }
+
+  Widget _leaderboardRow(String id, AgentEconomy econ, int rank, double topWallet) {
+    final color = Noir.agent(id);
+    final name = agentNames[id] ?? id;
+    final barWidth = (econ.wallet.abs() / topWallet).clamp(0.0, 1.0);
+    final isFirst = rank == 1;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: isFirst ? color.withOpacity(0.08) : Colors.white.withOpacity(0.02),
+        borderRadius: BorderRadius.circular(6),
+        border: isFirst ? Border.all(color: color.withOpacity(0.2)) : null,
+      ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Section header
-        Padding(padding: const EdgeInsets.fromLTRB(12, 10, 12, 6), child: Row(children: [
-          Icon(PhosphorIcons.lightning(PhosphorIconsStyle.fill), color: Noir.amber, size: 12),
+        Row(children: [
+          Text('#$rank', style: TextStyle(color: isFirst ? Noir.amber : Noir.textLow, fontSize: 10, fontWeight: FontWeight.w800, fontFamily: 'JetBrains Mono')),
           const SizedBox(width: 6),
-          Text('EVENTS • TICK $_tick', style: const TextStyle(color: Noir.textLow, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-        ])),
-        // Event list
-        Expanded(child: _events.isEmpty
-            ? Center(child: Text('Waiting for actions...', style: TextStyle(color: Noir.textMute, fontSize: 10)))
-            : ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          itemCount: _events.length,
-          itemBuilder: (ctx, i) => _eventTile(_events[i]).animate().fadeIn(duration: 200.ms, delay: Duration(milliseconds: i * 30)),
-        ),
-        ),
+          Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 5),
+          Expanded(child: Text(name, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700))),
+          Text('\$${econ.wallet.toStringAsFixed(0)}', style: TextStyle(color: econ.inDebt ? Noir.rose : Noir.emerald, fontSize: 11, fontWeight: FontWeight.w800, fontFamily: 'JetBrains Mono')),
+        ]),
+        const SizedBox(height: 3),
+        // Wallet bar
+        ClipRRect(borderRadius: BorderRadius.circular(2), child: LinearProgressIndicator(
+          value: barWidth, minHeight: 3, backgroundColor: Colors.white.withOpacity(0.04),
+          valueColor: AlwaysStoppedAnimation(econ.inDebt ? Noir.rose.withOpacity(0.5) : color.withOpacity(0.5)),
+        )),
       ]),
     );
   }
+
+  Widget _marketRow(String label, String value, Color c) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+      Text(label, style: const TextStyle(color: Noir.textMed, fontSize: 10)),
+      Text(value, style: TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w700, fontFamily: 'JetBrains Mono')),
+    ]),
+  );
+
+  Widget _sectionHeader(String title, IconData icon, Color color) => Row(children: [
+    Icon(icon, color: color.withOpacity(0.7), size: 12),
+    const SizedBox(width: 6),
+    Text(title, style: TextStyle(color: color.withOpacity(0.8), fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+  ]);
 
   Widget _eventTile(EventEntry evt) {
     final def = ActionDef.fromType(evt.type);
@@ -285,4 +400,51 @@ class _WorldDashboardState extends State<WorldDashboard> {
       ]),
     );
   }
+}
+
+// ==================================================================
+//  PRICE CHART PAINTER
+// ==================================================================
+
+class _PriceChartPainter extends CustomPainter {
+  final List<double> prices;
+  _PriceChartPainter(this.prices);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (prices.length < 2) return;
+    final minP = prices.reduce((a, b) => a < b ? a : b) * 0.95;
+    final maxP = prices.reduce((a, b) => a > b ? a : b) * 1.05;
+    final range = maxP - minP;
+    if (range == 0) return;
+
+    final isUp = prices.last >= prices.first;
+    final lineColor = isUp ? Noir.emerald : Noir.rose;
+
+    // Grid lines
+    final gridPaint = Paint()..color = Colors.white.withOpacity(0.04)..strokeWidth = 0.5;
+    for (int i = 0; i < 3; i++) canvas.drawLine(Offset(0, size.height * i / 2), Offset(size.width, size.height * i / 2), gridPaint);
+
+    // Fill
+    final fillPath = Path();
+    final linePath = Path();
+    for (int i = 0; i < prices.length; i++) {
+      final x = (i / (prices.length - 1)) * size.width;
+      final y = size.height - ((prices[i] - minP) / range) * size.height;
+      if (i == 0) { linePath.moveTo(x, y); fillPath.moveTo(x, size.height); fillPath.lineTo(x, y); }
+      else { linePath.lineTo(x, y); fillPath.lineTo(x, y); }
+    }
+    fillPath.lineTo(size.width, size.height); fillPath.close();
+    canvas.drawPath(fillPath, Paint()..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
+        colors: [lineColor.withOpacity(0.2), lineColor.withOpacity(0.0)]).createShader(Rect.fromLTWH(0, 0, size.width, size.height)));
+    canvas.drawPath(linePath, Paint()..color = lineColor..strokeWidth = 1.5..style = PaintingStyle.stroke..strokeCap = StrokeCap.round);
+
+    // Dot + label at end
+    final lastY = size.height - ((prices.last - minP) / range) * size.height;
+    canvas.drawCircle(Offset(size.width, lastY), 3, Paint()..color = lineColor);
+    final tp = TextPainter(text: TextSpan(text: '\$${prices.last.toStringAsFixed(2)}', style: TextStyle(color: lineColor, fontSize: 9, fontWeight: FontWeight.w700)), textDirection: TextDirection.ltr);
+    tp.layout(); tp.paint(canvas, Offset(size.width - tp.width - 4, lastY - 14));
+  }
+
+  @override bool shouldRepaint(covariant _PriceChartPainter old) => prices.length != old.prices.length;
 }
