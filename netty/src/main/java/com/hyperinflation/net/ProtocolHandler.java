@@ -89,17 +89,12 @@ public class ProtocolHandler extends SimpleChannelInboundHandler<TextWebSocketFr
                 conn.getClientId(),
                 newState.name(),
                 engine.getCurrentTick(),
-                List.of("world", "economy")  // hardcode since WorldEngine has no registry
+                List.of("world", "economy")
         );
         conn.sendPacket(ack);
 
-        // Send full world snapshot
-        S2CWorldSnapshot snapshot = new S2CWorldSnapshot(
-                engine.getCurrentTick(),
-                engine.getWorld().toFullMap(),
-                engine.getEconomy().toMap()  // was Map.of()
-        );
-        conn.sendPacket(snapshot);
+        // Send full world snapshot (includes locations now)
+        conn.sendPacket(engine.buildWorldSnapshot());
     }
 
     private void handleKeepAlive(ClientConnection conn, C2SKeepAlive keepAlive) {

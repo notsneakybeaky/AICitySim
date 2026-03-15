@@ -396,7 +396,13 @@ class _WorldRenderPanelState extends State<WorldRenderPanel>
       orElse: () => EventEntry(type: '', description: ''),
     );
     if (evt.type.isEmpty) return Noir.surface;
-    return _latestEventColor();
+    // Use the actual event type, not the global last event
+    final type = evt.type;
+    if (type.contains('ATTACK') || type.contains('SABOTAGE')) return Noir.rose;
+    if (type.contains('BUILD') || type.contains('BOOST')) return Noir.emerald;
+    if (type.contains('BID') || type.contains('DRAIN')) return Noir.amber;
+    if (type.contains('INFILTRATE') || type.contains('PROPAGANDA')) return Noir.violet;
+    return Noir.cyan;
   }
 
   String _fmtPop(int pop) {

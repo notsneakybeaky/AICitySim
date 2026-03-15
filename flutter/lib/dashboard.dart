@@ -167,6 +167,8 @@ class _WorldDashboardState extends State<WorldDashboard> {
   List<EventEntry> _events = [];
   List<double> _priceHistory = [];
   bool _connected = false;
+  Map<String, String> _agentLocations = {};
+  Map<String, String> _agentThoughts = {};
 
   // Track recent actions per agent (persists across ticks)
   final Map<String, List<EventEntry>> _agentHistory = {};
@@ -175,10 +177,12 @@ class _WorldDashboardState extends State<WorldDashboard> {
   void initState() {
     super.initState();
     _ws.connect().listen(_onPacket, onError: (_) {
-      setState(() {
-        _phase = 'DISCONNECTED';
-        _connected = false;
-      });
+      if (mounted) {
+        setState(() {
+          _phase = 'DISCONNECTED';
+          _connected = false;
+        });
+      }
     });
   }
 
@@ -189,6 +193,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
   }
 
   void _onPacket(ServerPacket pkt) {
+    if (!mounted) return;
     setState(() {
       switch (pkt.pid) {
         case S2C.handshakeAck:
@@ -204,6 +209,8 @@ class _WorldDashboardState extends State<WorldDashboard> {
           if (pkt.data['economy'] != null) {
             _economy = EconomyState.fromJson(pkt.data['economy']);
           }
+          _parseLocations(pkt.data['locations']);
+          _connected = true;
 
         case S2C.phaseChange:
           _tick = pkt.data['tick'] ?? _tick;
@@ -224,6 +231,8 @@ class _WorldDashboardState extends State<WorldDashboard> {
               .map((e) => EventEntry.fromJson(e as Map<String, dynamic>))
               .toList();
           _recordAgentHistory(_events);
+          _parseLocations(pkt.data['locations']);
+          _parseThoughts(pkt.data['thoughts']);
           _phase = 'TICK_COMPLETE';
 
         case S2C.cityUpdate:
@@ -266,6 +275,18 @@ class _WorldDashboardState extends State<WorldDashboard> {
         _cities[id] = City.fromJson(id, data);
       }
     });
+  }
+
+  void _parseLocations(dynamic locData) {
+    if (locData is Map<String, dynamic>) {
+      _agentLocations = locData.map((k, v) => MapEntry(k, v.toString()));
+    }
+  }
+
+  void _parseThoughts(dynamic thoughtData) {
+    if (thoughtData is Map<String, dynamic>) {
+      _agentThoughts = thoughtData.map((k, v) => MapEntry(k, v.toString()));
+    }
   }
 
   List<EventEntry> _eventsForAgent(String agentId) {
@@ -840,6 +861,9 @@ class _WorldDashboardState extends State<WorldDashboard> {
     final usageRatio = econ.allocatedPrompts > 0
         ? econ.promptsServed / econ.allocatedPrompts
         : 0.0;
+    // Location and thought
+    final location = _agentLocations[id];
+    final thought = _agentThoughts[id];
 
     return GlassCard(
       margin: const EdgeInsets.only(bottom: 10),
@@ -881,6 +905,21 @@ class _WorldDashboardState extends State<WorldDashboard> {
                     Text(id,
                         style: const TextStyle(
                             color: Noir.textLow, fontSize: 9)),
+                    if (location != null)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(PhosphorIcons.mapPin(PhosphorIconsStyle.fill),
+                              color: Noir.textLow, size: 9),
+                          const SizedBox(width: 3),
+                          Text(location.toUpperCase(),
+                              style: const TextStyle(
+                                  color: Noir.textMed,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.5)),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -942,6 +981,38 @@ class _WorldDashboardState extends State<WorldDashboard> {
             ),
 
           const SizedBox(height: 10),
+
+          // ---- Row 2.5: Agent thought ----
+          if (thought != null && thought.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.all(8),
+              margin: const EdgeInsets.only(bottom: 6),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: color.withOpacity(0.12)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(PhosphorIcons.brain(PhosphorIconsStyle.fill),
+                      color: color.withOpacity(0.5), size: 11),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      thought,
+                      style: TextStyle(
+                          color: Noir.textMed.withOpacity(0.8),
+                          fontSize: 10,
+                          fontStyle: FontStyle.italic,
+                          height: 1.3),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           // ---- Row 3: Prompts bar ----
           Row(

@@ -27,10 +27,14 @@ public final class PriceHistory {
 
     public double getPriceChange() {
         if (history.size() < 2) return 0.0;
-        double[] prev = ((ArrayDeque<double[]>) history).stream()
-                .skip(history.size() - 2).findFirst().orElse(null);
-        double[] curr = history.getLast();
-        if (prev == null) return 0.0;
+        Iterator<double[]> it = history.iterator();
+        double[] prev = null;
+        double[] curr = null;
+        while (it.hasNext()) {
+            prev = curr;
+            curr = it.next();
+        }
+        if (prev == null || curr == null) return 0.0;
         return (curr[1] - prev[1]) / prev[1];
     }
 

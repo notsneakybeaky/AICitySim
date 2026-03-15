@@ -22,44 +22,34 @@ public final class Agent {
             this.riskTolerance = riskTolerance;
             this.cooperation   = cooperation;
         }
-    }
 
-    // ---- Inner: Memory ----
-    public static final class Memory {
-        private final List<String> entries = new ArrayList<>();
-        private static final int MAX = 50;
-
-        public void record(String entry) {
-            entries.add(entry);
-            if (entries.size() > MAX) entries.remove(0);
-        }
-
-        public String buildTacticalSummary() {
-            if (entries.isEmpty()) return "No prior actions or observations.";
-            int start = Math.max(0, entries.size() - 15);
-            StringBuilder sb = new StringBuilder();
-            for (int i = start; i < entries.size(); i++) {
-                sb.append("- ").append(entries.get(i)).append("\n");
-            }
-            return sb.toString();
+        /** Construct from the standalone AgentPersonality class. */
+        public static Personality fromAgentPersonality(AgentPersonality ap) {
+            return new Personality(ap.name, ap.description, ap.priorities,
+                    ap.aggression, ap.riskTolerance, ap.cooperation);
         }
     }
 
-    private final String      id;
-    private final Personality  personality;
-    private final Memory       memory;
-    private boolean            alive;
+    private final String         id;
+    private final Personality    personality;
+    private final AgentMemory    memory;
+    private boolean              alive;
 
     public Agent(String id, Personality personality) {
         this.id          = id;
         this.personality = personality;
-        this.memory      = new Memory();
+        this.memory      = new AgentMemory(50);
         this.alive       = true;
     }
 
-    public String      getId()          { return id; }
-    public Personality  getPersonality() { return personality; }
-    public Memory       getMemory()      { return memory; }
-    public boolean      isAlive()        { return alive; }
-    public void         kill()           { alive = false; }
+    /** Convenience: construct from AgentPersonality roster entry. */
+    public Agent(AgentPersonality ap) {
+        this(ap.id, Personality.fromAgentPersonality(ap));
+    }
+
+    public String        getId()          { return id; }
+    public Personality   getPersonality() { return personality; }
+    public AgentMemory   getMemory()      { return memory; }
+    public boolean       isAlive()        { return alive; }
+    public void          kill()           { alive = false; }
 }

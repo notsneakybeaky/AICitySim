@@ -61,6 +61,16 @@ public final class PromptMarket {
         orderBook.removeIf(TradeOrder::isFilled);
     }
 
+    /**
+     * Match-only mode: runs order matching and clears filled orders,
+     * but does NOT allocate prompts, pay agents, or update price.
+     * Used by EconomyEngine which handles those steps itself.
+     */
+    public void matchOnly(Map<String, AgentEconomy> agentEconomies) {
+        matchOrders(agentEconomies);
+        orderBook.removeIf(TradeOrder::isFilled);
+    }
+
     private void matchOrders(Map<String, AgentEconomy> agentEconomies) {
         List<TradeOrder> bids = orderBook.stream()
                 .filter(o -> o.getSide() == TradeOrder.Side.BID && !o.isFilled())

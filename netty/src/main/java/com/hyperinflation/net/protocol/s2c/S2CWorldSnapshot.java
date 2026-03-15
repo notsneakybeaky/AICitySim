@@ -10,7 +10,8 @@ import java.util.Map;
 public record S2CWorldSnapshot(
         int tick,
         Map<String, Object> worldData,
-        Map<String, Object> economyData
+        Map<String, Object> economyData,
+        Map<String, String> locations
 ) implements Packet {
 
     @Override public int getPacketId() { return 0x02; }
@@ -19,9 +20,10 @@ public record S2CWorldSnapshot(
     @Override
     public Map<String, Object> serialize() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("tick",    tick);
-        m.put("world",   worldData);
-        m.put("economy", economyData);
+        m.put("tick",      tick);
+        m.put("world",     worldData);
+        m.put("economy",   economyData);
+        m.put("locations", locations);
         return m;
     }
 }

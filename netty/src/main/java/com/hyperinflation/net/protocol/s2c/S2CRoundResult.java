@@ -12,7 +12,9 @@ public record S2CRoundResult(
         int tick,
         Map<String, Object> worldState,
         Map<String, Object> economyState,
-        List<Map<String, Object>> events
+        List<Map<String, Object>> events,
+        Map<String, String> thoughts,
+        Map<String, String> locations
 ) implements Packet {
 
     @Override public int getPacketId() { return 0x08; }
@@ -21,10 +23,12 @@ public record S2CRoundResult(
     @Override
     public Map<String, Object> serialize() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("tick",    tick);
-        m.put("world",   worldState);
-        m.put("economy", economyState);
-        m.put("events",  events);
+        m.put("tick",      tick);
+        m.put("world",     worldState);
+        m.put("economy",   economyState);
+        m.put("events",    events);
+        m.put("thoughts",  thoughts);
+        m.put("locations", locations);
         return m;
     }
 }

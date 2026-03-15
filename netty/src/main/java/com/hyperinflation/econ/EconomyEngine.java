@@ -19,6 +19,8 @@ import java.util.*;
  *
  * PRICE floats based on supply/demand ratio as before.
  * TOTAL_PROMPT_VALUE grows with world GDP — the pie gets bigger as cities prosper.
+ *
+ * Now delegates order matching to PromptMarket and records history via PriceHistory.
  */
 public final class EconomyEngine {
 
@@ -28,10 +30,16 @@ public final class EconomyEngine {
     private int    totalSupply   = EconomyConfig.TOTAL_PROMPT_SUPPLY;
     private int    currentDemand = 0;
     private int    openOrders    = 0;
+    private int    tickCounter   = 0;
     private final Random rng     = new Random();
 
     private final Map<String, AgentEconomy> agentEconomies = new LinkedHashMap<>();
     private final Map<String, double[]>     bids           = new LinkedHashMap<>();
+    private final Map<String, double[]>     asks           = new LinkedHashMap<>();
+
+    // ---- Wired sub-systems ----
+    private final PromptMarket market       = new PromptMarket();
+    private final PriceHistory priceHistory  = new PriceHistory(200);
 
     public void registerAgent(String id, double startingWallet) {
         agentEconomies.put(id, new AgentEconomy(id, startingWallet));
@@ -43,6 +51,18 @@ public final class EconomyEngine {
 
     public void placeBid(String agentId, double price, int quantity) {
         bids.put(agentId, new double[]{price, quantity});
+        market.placeBid(agentId, price, quantity);
+    }
+
+    public void placeAsk(String agentId, double price, int quantity) {
+        asks.put(agentId, new double[]{price, quantity});
+        market.placeAsk(agentId, price, quantity);
+    }
+
+    /** Cancel all pending orders for an agent. */
+    public void cancelOrders(String agentId) {
+        bids.remove(agentId);
+        asks.remove(agentId);
     }
 
     /**
@@ -50,6 +70,7 @@ public final class EconomyEngine {
      * World is passed in so supply and demand can be derived from city stats.
      */
     public void tick(World world) {
+        tickCounter++;
 
         // 1. Supply = base + infrastructure contribution from all cities
         double infraSupply   = world.getTotalSupplyContribution();
@@ -72,7 +93,12 @@ public final class EconomyEngine {
         }
         totalSupply = Math.max(1, worldSupply + totalBidQty);
 
-        // 4. Allocate prompts to agents
+        // 4. Match bid/ask orders via PromptMarket (settles trades between agents)
+        if (!asks.isEmpty()) {
+            market.matchOnly(agentEconomies);
+        }
+
+        // 5. Allocate prompts to agents
         if (bids.isEmpty()) {
             int perAgent = currentDemand / Math.max(1, agentEconomies.size());
             for (AgentEconomy econ : agentEconomies.values()) {
@@ -105,17 +131,28 @@ public final class EconomyEngine {
             }
         }
 
-        // 5. Update price
+        // 6. Update price
         double ratio      = (double) currentDemand / Math.max(1, totalSupply);
         double priceShift = (ratio - 1.0) * 0.05 + rng.nextGaussian() * 0.01;
         promptPrice       = Math.max(0.01, promptPrice * (1.0 + priceShift));
 
-        openOrders = bids.size();
+        // 7. Agent maintenance — keeps agents hungry, wallet CAN go negative
+        for (AgentEconomy econ : agentEconomies.values()) {
+            econ.payMaintenance();
+        }
+
+        // 8. Record price history
+        int totalVolume = agentEconomies.values().stream().mapToInt(AgentEconomy::getPromptsServed).sum();
+        priceHistory.record(tickCounter, promptPrice, totalVolume);
+
+        openOrders = bids.size() + asks.size();
         bids.clear();
+        asks.clear();
     }
 
     /** Legacy tick with no world data — used as fallback. */
     public void tick() {
+        tickCounter++;
         int baseDemand = (int) (TOTAL_PROMPT_VALUE / Math.max(0.01, promptPrice));
         int noise      = rng.nextInt(Math.max(1, baseDemand / 5)) - baseDemand / 10;
         currentDemand  = Math.max(10, baseDemand + noise);
@@ -125,20 +162,26 @@ public final class EconomyEngine {
         double priceShift = (ratio - 1.0) * 0.05 + rng.nextGaussian() * 0.01;
         promptPrice       = Math.max(0.01, promptPrice * (1.0 + priceShift));
 
+        for (AgentEconomy econ : agentEconomies.values()) {
+            econ.payMaintenance();
+        }
+
+        priceHistory.record(tickCounter, promptPrice, 0);
         openOrders = bids.size();
         bids.clear();
+        asks.clear();
     }
 
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
 
-        Map<String, Object> market = new LinkedHashMap<>();
-        market.put("price",              Math.round(promptPrice * 100.0) / 100.0);
-        market.put("total_supply",       totalSupply);
-        market.put("current_demand",     currentDemand);
-        market.put("total_market_value", TOTAL_PROMPT_VALUE);
-        market.put("open_orders",        openOrders);
-        m.put("market", market);
+        Map<String, Object> marketMap = new LinkedHashMap<>();
+        marketMap.put("price",              Math.round(promptPrice * 100.0) / 100.0);
+        marketMap.put("total_supply",       totalSupply);
+        marketMap.put("current_demand",     currentDemand);
+        marketMap.put("total_market_value", TOTAL_PROMPT_VALUE);
+        marketMap.put("open_orders",        openOrders);
+        m.put("market", marketMap);
 
         Map<String, Object> agents = new LinkedHashMap<>();
         for (Map.Entry<String, AgentEconomy> e : agentEconomies.entrySet()) {
@@ -146,10 +189,14 @@ public final class EconomyEngine {
         }
         m.put("agents", agents);
 
+        m.put("price_history", priceHistory.toList());
+
         return m;
     }
 
-    public double getPromptPrice()   { return promptPrice; }
-    public int    getTotalSupply()   { return totalSupply; }
-    public int    getCurrentDemand() { return currentDemand; }
+    public double       getPromptPrice()   { return promptPrice; }
+    public int          getTotalSupply()   { return totalSupply; }
+    public int          getCurrentDemand() { return currentDemand; }
+    public PriceHistory getPriceHistory()  { return priceHistory; }
+    public PromptMarket getMarket()        { return market; }
 }

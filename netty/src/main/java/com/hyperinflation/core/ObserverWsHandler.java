@@ -2,11 +2,22 @@ package com.hyperinflation.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hyperinflation.net.ClientConnection;
+import com.hyperinflation.net.ConnectionManager;
+import com.hyperinflation.net.protocol.PacketCodec;
+import com.hyperinflation.net.protocol.s2c.S2CHandshakeAck;
+import com.hyperinflation.net.protocol.s2c.S2CWorldSnapshot;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 
+import java.util.List;
+
+/**
+ * Legacy observer WebSocket handler.
+ * Now delegates to ConnectionManager for proper client tracking.
+ */
 public class ObserverWsHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -34,8 +45,20 @@ public class ObserverWsHandler extends SimpleChannelInboundHandler<TextWebSocket
                 case 0x01: // Handshake
                     String name = pkt.path("d").path("client_name").asText("unknown");
                     System.out.println("[WS] Handshake from: " + name);
-                    String clientId = engine.addObserver(ctx.channel());
-                    System.out.println("[WS] Registered: " + clientId);
+
+                    // Send ack + snapshot using the proper packet types
+                    S2CHandshakeAck ack = new S2CHandshakeAck(
+                            "legacy-" + ctx.channel().id().asShortText(),
+                            "SPECTATE",
+                            engine.getCurrentTick(),
+                            List.of("world", "economy")
+                    );
+                    ctx.writeAndFlush(new TextWebSocketFrame(PacketCodec.encode(ack)));
+
+                    S2CWorldSnapshot snapshot = engine.buildWorldSnapshot();
+                    ctx.writeAndFlush(new TextWebSocketFrame(PacketCodec.encode(snapshot)));
+
+                    System.out.println("[WS] Registered legacy observer: " + name);
                     break;
 
                 case 0x02: // Keep-alive

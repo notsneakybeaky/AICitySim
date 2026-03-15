@@ -60,9 +60,36 @@ public class HttpApiHandler extends ChannelInboundHandlerAdapter {
                     sendJson(ctx, HttpResponseStatus.OK, mapper.writeValueAsString(status));
                 }
 
-                case "/api/modules", "/api/modules/switch", "/api/events" ->
-                        sendJson(ctx, HttpResponseStatus.NOT_FOUND,
-                                "{\"error\":\"not implemented\"}");
+                case "/api/modules" -> {
+                    Map<String, Object> mods = new LinkedHashMap<>();
+                    mods.put("registered", engine.getModuleRegistry().getRegisteredIds());
+                    mods.put("active", engine.getModuleRegistry().getActiveIds());
+                    sendJson(ctx, HttpResponseStatus.OK, mapper.writeValueAsString(mods));
+                }
+
+                case "/api/events" ->
+                        sendJson(ctx, HttpResponseStatus.OK,
+                                mapper.writeValueAsString(engine.getEvents()));
+
+                case "/api/agents" -> {
+                    var agentList = new java.util.ArrayList<Map<String, Object>>();
+                    for (var agent : engine.getAgents()) {
+                        Map<String, Object> a = new LinkedHashMap<>();
+                        a.put("id", agent.getId());
+                        a.put("name", agent.getPersonality().name);
+                        a.put("alive", agent.isAlive());
+                        a.put("location", engine.getLocations().get(agent.getId()));
+                        var econ = engine.getEconomy().getAgentEconomy(agent.getId());
+                        if (econ != null) a.put("economy", econ.toMap());
+                        a.put("memory_size", agent.getMemory().getSize());
+                        agentList.add(a);
+                    }
+                    sendJson(ctx, HttpResponseStatus.OK, mapper.writeValueAsString(agentList));
+                }
+
+                case "/api/locations" ->
+                        sendJson(ctx, HttpResponseStatus.OK,
+                                mapper.writeValueAsString(engine.getLocations()));
 
                 default ->
                         sendJson(ctx, HttpResponseStatus.NOT_FOUND,
