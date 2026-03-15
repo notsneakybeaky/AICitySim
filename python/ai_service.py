@@ -39,6 +39,26 @@ VALID_ACTIONS = {
 
 VALID_CITY_IDS = {"nexus", "ironhold", "freeport", "eden", "vault"}
 
+VALID_AGENT_IDS = {
+    "agent-0", "agent-1", "agent-2", "agent-3", "agent-4",
+    "agent-5", "agent-6", "agent-7", "agent-8", "agent-9",
+}
+
+# Single source of truth for agent names and colors.
+# Flutter reads this from GET /roster.
+AGENT_ROSTER = {
+    "agent-0": {"name": "The Grinder",   "color": 0xFF42A5F5},
+    "agent-1": {"name": "The Shark",     "color": 0xFFEF5350},
+    "agent-2": {"name": "The Diplomat",  "color": 0xFFAB47BC},
+    "agent-3": {"name": "The Gambler",   "color": 0xFF66BB6A},
+    "agent-4": {"name": "The Architect", "color": 0xFFFFA726},
+    "agent-5": {"name": "The Parasite",  "color": 0xFF26C6DA},
+    "agent-6": {"name": "The Zealot",    "color": 0xFFEF6C00},
+    "agent-7": {"name": "The Ghost",     "color": 0xFF78909C},
+    "agent-8": {"name": "The Banker",    "color": 0xFF9CCC65},
+    "agent-9": {"name": "The Warlord",   "color": 0xFFE53935},
+}
+
 
 # =============================================================================
 #  REQUEST / RESPONSE MODELS
@@ -103,7 +123,6 @@ class AllianceResponse(BaseModel):
 
 def build_turn_prompt(req: AgentTurnRequest) -> str:
 
-    # City summary — include new mechanics stats
     cities_text = ""
     cities = req.world_state.get("cities", {})
     for city_id, city in cities.items():
@@ -118,22 +137,19 @@ def build_turn_prompt(req: AgentTurnRequest) -> str:
             f"    Supply contribution: {supply_contribution:.1f}  Demand multiplier: {demand_multiplier:.2f}x\n"
         )
 
-    # Other agents with locations
     agents_text = ""
     for agent in req.other_agents:
-        loc = agent.get("location", "unknown")
+        loc    = agent.get("location", "unknown")
+        wallet = agent.get("wallet", 0)
         agents_text += (
             f"  {agent.get('name', agent['id'])} ({agent['id']}): "
-            f"wallet=${agent.get('wallet', '?'):.1f}  "
-            f"location={loc}  "
+            f"wallet=${wallet:.1f}  location={loc}  "
             f"in_debt={agent.get('in_debt', False)}\n"
         )
 
-    # Economy summary
-    market = req.economy_state.get("market", {})
-    world_gdp    = req.world_state.get("total_gdp", 0)
-    world_supply = req.world_state.get("total_supply_capacity", 0)
-    demand_mult  = req.world_state.get("avg_demand_multiplier", 1.0)
+    market      = req.economy_state.get("market", {})
+    world_gdp   = req.world_state.get("total_gdp", 0)
+    demand_mult = req.world_state.get("avg_demand_multiplier", 1.0)
     economy_text = (
         f"  Prompt Price: ${market.get('price', '?')}  "
         f"Supply: {market.get('total_supply', '?')}  "
@@ -143,13 +159,14 @@ def build_turn_prompt(req: AgentTurnRequest) -> str:
         f"Avg Demand Multiplier: {demand_mult:.2f}x\n"
     )
 
-    # Distance cost warning
     distance_warning = ""
     if req.current_city != "unknown":
         distance_warning = (
-            f"\nNOTE: Acting on cities far from your location costs more.\n"
-            f"Cost multiplier = 1.0 + (distance / 20). Stay near your targets to save money.\n"
+            f"\nNOTE: Acting on distant cities costs more. "
+            f"Cost multiplier = 1.0 + (distance/20). Move near your targets to save money.\n"
         )
+
+    valid_agents_str = ", ".join(sorted(VALID_AGENT_IDS - {req.agent_id}))
 
     return f"""You are "{req.personality_name}".
 Description: {req.personality_description}
@@ -167,47 +184,44 @@ In Debt: {req.in_debt}  Tick: {req.current_tick}
 
 === WORLD STATE ===
 HOW STATS AFFECT THE MARKET:
-- Infrastructure → increases global prompt SUPPLY. Build it to flood the market.
-- Happiness → increases global DEMAND (more prompts bought). But only if Social Cohesion > 40.
-- Social Cohesion < 40 → INVERTS happiness effect. Happy city with low cohesion actually SUPPRESSES demand.
-  This means you can spread propaganda to kill demand in a rival's city even if it looks happy.
-- Defenses → reduce attack effectiveness by their percentage. 80 defenses = attacks do 20% damage.
-  Defenses also reduce INFILTRATE (50% effective) and PROPAGANDA (30% effective).
-- Infrastructure creates jobs. High infra + low employment = labor shortage = happiness penalty.
+- Infrastructure increases global prompt SUPPLY. Build it to expand the market.
+- Happiness increases global DEMAND — but ONLY if Social Cohesion > 40.
+- Social Cohesion < 40 INVERTS happiness. A happy city with low cohesion SUPPRESSES demand.
+  Spread propaganda to tank a rival's demand even if their city looks happy.
+- Defenses reduce attack damage by their percentage. 80 defenses = 20% damage lands.
+  Also reduces INFILTRATE (50% effective) and PROPAGANDA (30% effective).
+- High infrastructure + low employment = labor shortage = happiness penalty.
 
 Cities:
-{cities_text}
-{distance_warning}
+{cities_text}{distance_warning}
 === ECONOMY ===
 {economy_text}
-
 === OTHER AGENTS ===
 {agents_text}
-
 === YOUR TASK ===
-Choose 1-2 actions this tick based on your personality and strategy.
-Use your memory to learn — avoid repeating failures, double down on successes.
+Choose 1-2 actions this tick. Stay true to your personality.
+Learn from memory — stop repeating failures, double down on successes.
 
 AVAILABLE ACTIONS:
-- MOVE_TO: Travel to a city. Target: city_id. Cost: $1/tile. No params needed. Move to be near your targets.
+- MOVE_TO: Travel to a city. Target: city_id. Cost $1/tile. No params.
 - PLACE_BID: Bid for prompt allocation. Params: {{"price": <float>, "quantity": <int>}}
-- PLACE_ASK: Offer prompts. Params: {{"price": <float>, "quantity": <int>}}
-- BUILD_INFRASTRUCTURE: Invest in city supply capacity. Target: city_id. Params: {{"amount": <1-20>}}
-- DAMAGE_INFRASTRUCTURE: Sabotage rival city supply. Target: city_id. Params: {{"amount": <1-20>}}
-- BOOST_HAPPINESS: Boost demand in a city. Target: city_id. Params: {{"amount": <1-15>}}
-- DAMAGE_HAPPINESS: Hurt demand. Target: city_id. Params: {{"amount": <1-15>}}
-- ATTACK_CITY: Direct attack — blocked by defenses. Target: city_id. Params: {{"power": <5-30>}}
+- PLACE_ASK: Sell prompts. Params: {{"price": <float>, "quantity": <int>}}
+- BUILD_INFRASTRUCTURE: Boost city supply capacity. Target: city_id. Params: {{"amount": <1-20>}}
+- DAMAGE_INFRASTRUCTURE: Sabotage city supply. Target: city_id. Params: {{"amount": <1-20>}}
+- BOOST_HAPPINESS: Increase city demand. Target: city_id. Params: {{"amount": <1-15>}}
+- DAMAGE_HAPPINESS: Reduce city demand. Target: city_id. Params: {{"amount": <1-15>}}
+- ATTACK_CITY: Direct attack, blocked by defenses. Target: city_id. Params: {{"power": <5-30>}}
 - DEFEND_CITY: Fortify defenses. Target: city_id. Params: {{"amount": <1-20>}}
-- INFILTRATE: Strip defenses covertly — partially resisted. Target: city_id. Params: {{"amount": <1-10>}}
-- SPREAD_PROPAGANDA: Lower social cohesion to invert happiness demand. Target: city_id. Params: {{"amount": <1-10>}}
+- INFILTRATE: Covertly strip defenses. Target: city_id. Params: {{"amount": <1-10>}}
+- SPREAD_PROPAGANDA: Lower cohesion to invert demand. Target: city_id. Params: {{"amount": <1-10>}}
 - DRAIN_TREASURY: Steal city funds. Target: city_id. Params: {{"amount": <float>}}
-- INJECT_CAPITAL: Fund a city treasury. Target: city_id. Params: {{"amount": <float>}}
+- INJECT_CAPITAL: Fund a city. Target: city_id. Params: {{"amount": <float>}}
 - FORM_ALLIANCE: Propose alliance. Target: agent_id. Params: {{"terms": "<string>"}}
 - BREAK_ALLIANCE: End alliance. Target: agent_id.
 - NO_OP: Skip this tick.
 
 Valid city IDs: nexus, ironhold, freeport, eden, vault
-Valid agent IDs: agent-0, agent-1, agent-2, agent-3, agent-4
+Valid agent IDs: {valid_agents_str}
 
 Return ONLY valid JSON:
 {{
@@ -237,7 +251,7 @@ Their wallet: ${req.proposer_wallet:.2f}
 Their description: {req.proposer_description}
 Their terms: "{req.alliance_terms}"
 
-Should you accept? Consider: does this help your priorities? Are they trustworthy? Could they betray you?
+Should you accept? Does this help your priorities? Are they trustworthy? Could they betray you?
 
 Return ONLY valid JSON:
 {{
@@ -295,21 +309,28 @@ def validate_action(action_data: dict) -> AgentAction:
     params    = action_data.get("params", {})
     reasoning = action_data.get("reasoning", "")
 
-    # Validate city target
-    if action_type in (
-            "BUILD_INFRASTRUCTURE", "DAMAGE_INFRASTRUCTURE",
-            "BOOST_HAPPINESS", "DAMAGE_HAPPINESS",
-            "ATTACK_CITY", "DEFEND_CITY",
-            "INFILTRATE", "SPREAD_PROPAGANDA",
-            "DRAIN_TREASURY", "INJECT_CAPITAL",
-            "MOVE_TO"
-    ):
+    city_actions = {
+        "BUILD_INFRASTRUCTURE", "DAMAGE_INFRASTRUCTURE",
+        "BOOST_HAPPINESS", "DAMAGE_HAPPINESS",
+        "ATTACK_CITY", "DEFEND_CITY",
+        "INFILTRATE", "SPREAD_PROPAGANDA",
+        "DRAIN_TREASURY", "INJECT_CAPITAL",
+        "MOVE_TO",
+    }
+    agent_actions = {"FORM_ALLIANCE", "BREAK_ALLIANCE"}
+
+    if action_type in city_actions:
         if target_id not in VALID_CITY_IDS:
-            print(f"[AI] Invalid city target '{target_id}' for {action_type}, defaulting to NO_OP")
+            print(f"[AI] Invalid city '{target_id}' for {action_type}, defaulting to NO_OP")
             action_type = "NO_OP"
             target_id   = None
 
-    # Clamp params
+    if action_type in agent_actions:
+        if target_id not in VALID_AGENT_IDS:
+            print(f"[AI] Invalid agent '{target_id}' for {action_type}, defaulting to NO_OP")
+            action_type = "NO_OP"
+            target_id   = None
+
     clamped_params = {}
     for key, value in params.items():
         if isinstance(value, (int, float)):
@@ -357,7 +378,7 @@ async def agent_turn(req: AgentTurnRequest):
     if not raw_actions:
         raw_actions = [{"type": "NO_OP", "reasoning": "No action decided."}]
 
-    raw_actions       = raw_actions[:2]  # Max 2 actions per tick
+    raw_actions       = raw_actions[:2]
     validated_actions = [validate_action(a) for a in raw_actions]
     internal_thought  = result.get("internal_thought", "")
 
@@ -392,6 +413,12 @@ async def alliance_decision(req: AllianceRequest):
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+@app.get("/roster")
+async def roster():
+    """Returns agent names and colors — Flutter can pull this once on startup."""
+    return AGENT_ROSTER
 
 
 # =============================================================================
