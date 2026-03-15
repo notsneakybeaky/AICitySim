@@ -5,7 +5,14 @@ import 'models.dart';
 import 'theme.dart';
 
 // =============================================================================
-//  WORLD RENDER PANEL
+//  WORLD RENDER PANEL — Strategic Map View
+//
+//  Design goals:
+//    1. Cities are the heroes — big, clear, stat-readable nodes
+//    2. Agents shown AT their actual city (not some sidebar)
+//    3. Actions shown as arcs between source agent → target city
+//    4. Color = health status at a glance (green/amber/red)
+//    5. Minimal animation — only where it conveys live info
 // =============================================================================
 
 class WorldRenderPanel extends StatefulWidget {
@@ -13,6 +20,7 @@ class WorldRenderPanel extends StatefulWidget {
   final List<EventEntry> events;
   final int tick;
   final String phase;
+  final Map<String, String> agentLocations;
 
   const WorldRenderPanel({
     super.key,
@@ -20,6 +28,7 @@ class WorldRenderPanel extends StatefulWidget {
     required this.events,
     required this.tick,
     required this.phase,
+    this.agentLocations = const {},
   });
 
   @override
@@ -35,7 +44,7 @@ class _WorldRenderPanelState extends State<WorldRenderPanel>
     super.initState();
     _anim = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 4),
+      duration: const Duration(seconds: 3),
     )..repeat();
   }
 
@@ -45,27 +54,46 @@ class _WorldRenderPanelState extends State<WorldRenderPanel>
     super.dispose();
   }
 
-  /// Build region groups dynamically from city data.
-  Map<String, List<String>> _buildRegionGroups() {
-    final groups = <String, List<String>>{};
-    for (final city in widget.cities.values) {
-      final r = city.regionId.isNotEmpty ? city.regionId : 'default';
-      groups.putIfAbsent(r, () => []).add(city.id);
-    }
-    return groups;
+  // City positions — spread across the panel in a readable layout
+  // Using fixed fractional positions so they don't overlap
+  static const _cityLayout = <String, List<double>>{
+    'nexus':    [0.50, 0.30], // center-top (capital)
+    'ironhold': [0.20, 0.55], // left-mid
+    'freeport': [0.80, 0.22], // right-top
+    'eden':     [0.72, 0.70], // right-bottom
+    'vault':    [0.15, 0.20], // left-top
+  };
+
+  Offset _cityPos(String cityId, Size size) {
+    final frac = _cityLayout[cityId] ?? [0.5, 0.5];
+    return Offset(frac[0] * size.width, frac[1] * size.height);
   }
 
-  static final _regionPalette = [
-    Noir.cyan,
-    Noir.emerald,
-    Noir.amber,
-    Noir.violet,
-    Noir.rose,
-    Noir.primary,
-  ];
+  Color _healthColor(double happiness) {
+    if (happiness >= 65) return Noir.emerald;
+    if (happiness >= 40) return Noir.amber;
+    return Noir.rose;
+  }
 
-  Color _regionColor(String regionId) {
-    return _regionPalette[regionId.hashCode.abs() % _regionPalette.length];
+  Color _evtColor(String type) {
+    if (type.contains('ATTACK') || type.contains('SABOTAGE') ||
+        type.contains('UNREST') || type.contains('DAMAGE')) {
+      return Noir.rose;
+    }
+    if (type.contains('BUILD') || type.contains('BOOST') ||
+        type.contains('DEFEND') || type.contains('INJECT')) {
+      return Noir.emerald;
+    }
+    if (type.contains('BID') || type.contains('ASK') ||
+        type.contains('DRAIN') || type.contains('EARN')) {
+      return Noir.amber;
+    }
+    if (type.contains('INFILTRATE') || type.contains('PROPAGANDA')) {
+      return Noir.violet;
+    }
+    if (type.contains('MOVE')) return Noir.cyan;
+    if (type.contains('ALLIANCE')) return Noir.cyan;
+    return Noir.textLow;
   }
 
   @override
@@ -75,337 +103,378 @@ class _WorldRenderPanelState extends State<WorldRenderPanel>
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 16, 8, 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1120),
+        color: const Color(0xFF0A0F1E),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Noir.primary.withOpacity(0.15), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Noir.primary.withOpacity(0.05),
-            blurRadius: 30,
-            spreadRadius: 5,
-          ),
-        ],
+        border: Border.all(color: Colors.white.withOpacity(0.06), width: 1),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
-        child: Stack(
-          children: [
-            // Canvas
-            Positioned.fill(
-              child: AnimatedBuilder(
-                animation: _anim,
-                builder: (_, __) => CustomPaint(
-                  painter: _WorldMapPainter(
-                    cities: widget.cities,
-                    events: widget.events,
-                    regionGroups: _buildRegionGroups(),
-                    regionColorFn: _regionColor,
-                    animValue: _anim.value,
-                    tick: widget.tick,
-                    hasData: hasData,
-                  ),
-                ),
-              ),
-            ),
-
-            // City labels (only when data exists)
-            if (hasData)
-              ...widget.cities.values.map((city) => _buildCityLabel(city)),
-
-            // ---- Top-left HUD ----
-            Positioned(
-              top: 12,
-              left: 14,
-              child: Row(
-                children: [
-                  _hudBadge(
-                    PhosphorIcons.globe(PhosphorIconsStyle.fill),
-                    'WORLD VIEW',
-                    Noir.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.04),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text('TICK ${widget.tick}',
-                        style: const TextStyle(
-                            color: Noir.textLow,
-                            fontSize: 9,
-                            fontFamily: 'JetBrains Mono',
-                            letterSpacing: 1)),
-                  ),
-                ],
-              ),
-            ),
-
-            // ---- Top-right: render target ----
-            Positioned(
-              top: 12,
-              right: 14,
-              child: _hudBadge(
-                PhosphorIcons.cube(PhosphorIconsStyle.fill),
-                'RENDER TARGET',
-                Noir.amber,
-              ),
-            ),
-
-            // ---- Bottom-left: legend ----
-            Positioned(bottom: 12, left: 14, child: _buildLegend()),
-
-            // ---- Bottom-right: stats ----
-            Positioned(
-              bottom: 12,
-              right: 14,
-              child: Text(
-                hasData
-                    ? '${widget.cities.length} CITIES  •  ${_buildRegionGroups().length} REGIONS'
-                    : 'AWAITING DATA',
-                style: const TextStyle(
-                    color: Noir.textLow,
-                    fontSize: 9,
-                    fontFamily: 'JetBrains Mono',
-                    letterSpacing: 1),
-              ),
-            ),
-
-            // ---- Center notice when no data ----
-            if (!hasData)
-              Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(PhosphorIcons.globe(PhosphorIconsStyle.duotone),
-                        color: Noir.primary.withOpacity(0.15), size: 64),
-                    const SizedBox(height: 12),
-                    const Text('AWAITING WORLD DATA',
-                        style: TextStyle(
-                            color: Noir.textLow,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 3)),
-                    const SizedBox(height: 4),
-                    Text(
-                        'Connect to simulation server to see the world render',
-                        style: TextStyle(
-                            color: Noir.textMute, fontSize: 10)),
-                  ],
-                ),
-              ),
-
-            // ---- Latest event flash ----
-            if (widget.events.isNotEmpty && widget.phase == 'TICK_COMPLETE')
-              Positioned(
-                bottom: 30,
-                left: 60,
-                right: 60,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: _latestEventColor().withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: _latestEventColor().withOpacity(0.3)),
-                    ),
-                    child: Text(
-                      widget.events.last.description,
-                      style: TextStyle(
-                          color: _latestEventColor(),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
+        child: hasData ? _buildLiveMap() : _buildEmptyState(),
       ),
     );
   }
 
-  Widget _hudBadge(IconData icon, String text, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withOpacity(0.2)),
-      ),
-      child: Row(
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: color, size: 10),
-          const SizedBox(width: 5),
-          Text(text,
+          Icon(PhosphorIcons.globe(PhosphorIconsStyle.duotone),
+              color: Noir.primary.withOpacity(0.15), size: 64),
+          const SizedBox(height: 12),
+          const Text('AWAITING WORLD DATA',
               style: TextStyle(
-                  color: color,
-                  fontSize: 8,
+                  color: Noir.textLow,
+                  fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  letterSpacing: 1.5)),
+                  letterSpacing: 3)),
+          const SizedBox(height: 4),
+          Text('Connect to simulation server to begin',
+              style: TextStyle(color: Noir.textMute, fontSize: 10)),
         ],
       ),
     );
   }
 
-  Widget _buildCityLabel(City city) {
-    final xFrac = (city.tileX / 25.0).clamp(0.05, 0.9);
-    final yFrac = (city.tileY / 22.0).clamp(0.05, 0.9);
+  Widget _buildLiveMap() {
+    return Stack(
+      children: [
+        // Canvas layer — connections + action arcs
+        Positioned.fill(
+          child: AnimatedBuilder(
+            animation: _anim,
+            builder: (_, __) => CustomPaint(
+              painter: _MapPainter(
+                cities: widget.cities,
+                events: widget.events,
+                cityPosFn: _cityPos,
+                evtColorFn: _evtColor,
+                agentLocations: widget.agentLocations,
+                animValue: _anim.value,
+              ),
+            ),
+          ),
+        ),
 
-    final healthColor = city.happiness >= 70
-        ? Noir.emerald
-        : city.happiness >= 40
-        ? Noir.amber
-        : Noir.rose;
+        // City nodes — Flutter widgets for crisp text
+        ...widget.cities.entries.map((e) => _buildCityNode(e.key, e.value)),
 
-    final wasTargeted = widget.events.any((e) => e.target == city.id);
+        // Agent badges at their cities
+        ..._buildAgentBadges(),
+
+        // Top-left: phase + tick
+        Positioned(
+          top: 10,
+          left: 12,
+          child: _phaseIndicator(),
+        ),
+
+        // Bottom: event ticker
+        if (widget.events.isNotEmpty && widget.phase == 'TICK_COMPLETE')
+          Positioned(
+            bottom: 10,
+            left: 12,
+            right: 12,
+            child: _eventTicker(),
+          ),
+      ],
+    );
+  }
+
+  // ================================================================
+  //  CITY NODE — the main information display
+  // ================================================================
+
+  Widget _buildCityNode(String id, City city) {
+    final color = _healthColor(city.happiness);
+    final isUnderAttack = widget.events.any(
+            (e) => e.target == id && (e.type.contains('ATTACK') ||
+            e.type.contains('SABOTAGE') || e.type.contains('DAMAGE')));
+    final isBeingBuilt = widget.events.any(
+            (e) => e.target == id && (e.type.contains('BUILD') ||
+            e.type.contains('BOOST') || e.type.contains('DEFEND')));
 
     return Positioned(
-      left: 0,
-      top: 0,
-      right: 0,
-      bottom: 0,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final x = constraints.maxWidth * xFrac;
-          final y = constraints.maxHeight * yFrac;
+      left: 0, top: 0, right: 0, bottom: 0,
+      child: LayoutBuilder(builder: (context, constraints) {
+        final pos = _cityPos(id, Size(constraints.maxWidth, constraints.maxHeight));
+        // Offset so the card is centered on the position
+        const cardW = 140.0;
+        const cardH = 88.0;
+
+        return Stack(children: [
+          Positioned(
+            left: pos.dx - cardW / 2,
+            top: pos.dy - cardH / 2,
+            width: cardW,
+            child: _CityCard(
+              city: city,
+              color: color,
+              isUnderAttack: isUnderAttack,
+              isBeingBuilt: isBeingBuilt,
+            ),
+          ),
+        ]);
+      }),
+    );
+  }
+
+  // ================================================================
+  //  AGENT BADGES — colored dots at their city
+  // ================================================================
+
+  List<Widget> _buildAgentBadges() {
+    // Group agents by city
+    final Map<String, List<String>> cityAgents = {};
+    for (final entry in widget.agentLocations.entries) {
+      cityAgents.putIfAbsent(entry.value, () => []).add(entry.key);
+    }
+
+    final widgets = <Widget>[];
+    for (final entry in cityAgents.entries) {
+      final cityId = entry.key;
+      final agentIds = entry.value;
+      if (!widget.cities.containsKey(cityId)) continue;
+
+      widgets.add(Positioned(
+        left: 0, top: 0, right: 0, bottom: 0,
+        child: LayoutBuilder(builder: (context, constraints) {
+          final size = Size(constraints.maxWidth, constraints.maxHeight);
+          final pos = _cityPos(cityId, size);
+          // Place agent row below the city card
+          final baseX = pos.dx - (agentIds.length * 14.0) / 2;
+          final baseY = pos.dy + 50;
 
           return Stack(
             children: [
-              Positioned(
-                left: x + 14,
-                top: y - 8,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: (wasTargeted
-                            ? _eventColorForCity(city.id)
-                            : Noir.surface)
-                            .withOpacity(0.85),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: wasTargeted
-                              ? _eventColorForCity(city.id).withOpacity(0.4)
-                              : Colors.white.withOpacity(0.08),
-                        ),
-                      ),
-                      child: Text(city.name.toUpperCase(),
-                          style: const TextStyle(
-                              color: Noir.textHigh,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1)),
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                            width: 5,
-                            height: 5,
-                            decoration: BoxDecoration(
-                                color: healthColor,
-                                shape: BoxShape.circle)),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${city.happiness.toStringAsFixed(0)}%  ${_fmtPop(city.population)}',
-                          style: const TextStyle(
-                              color: Noir.textLow,
-                              fontSize: 8,
-                              fontFamily: 'JetBrains Mono'),
-                        ),
-                      ],
-                    ),
-                  ],
+              for (int i = 0; i < agentIds.length; i++)
+                Positioned(
+                  left: baseX + i * 14.0,
+                  top: baseY,
+                  child: _AgentDot(
+                    agentId: agentIds[i],
+                    hasEvent: widget.events.any((e) => e.agent == agentIds[i]),
+                  ),
                 ),
-              ),
             ],
           );
-        },
-      ),
-    );
+        }),
+      ));
+    }
+    return widgets;
   }
 
-  Widget _buildLegend() {
+  // ================================================================
+  //  PHASE INDICATOR
+  // ================================================================
+
+  Widget _phaseIndicator() {
+    final isLive = widget.phase == 'COLLECTING' || widget.phase == 'PROCESSING';
+    final color = isLive ? Noir.cyan : Noir.textLow;
+
     return Container(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1120).withOpacity(0.85),
+        color: const Color(0xFF0A0F1E).withOpacity(0.9),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
+        border: Border.all(color: color.withOpacity(0.25)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _legendItem(Noir.emerald, 'Stable (>70)'),
-          _legendItem(Noir.amber, 'Stressed (40-70)'),
-          _legendItem(Noir.rose, 'Critical (<40)'),
-          _legendItem(Noir.primary, 'Region link'),
-          _legendItem(Noir.cyan, 'Defense ring'),
-        ],
-      ),
-    );
-  }
-
-  Widget _legendItem(Color color, String label) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1.5),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-              width: 8,
-              height: 3,
+          if (isLive)
+            Container(
+              width: 6, height: 6, margin: const EdgeInsets.only(right: 6),
               decoration: BoxDecoration(
-                  color: color, borderRadius: BorderRadius.circular(2))),
-          const SizedBox(width: 6),
-          Text(label,
-              style: const TextStyle(color: Noir.textLow, fontSize: 8)),
+                color: color, shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: color.withOpacity(0.5), blurRadius: 6)],
+              ),
+            ),
+          Text(
+            'TICK ${widget.tick}',
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'JetBrains Mono',
+              letterSpacing: 1,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            widget.phase,
+            style: TextStyle(
+              color: color.withOpacity(0.6),
+              fontSize: 8,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Color _latestEventColor() {
-    if (widget.events.isEmpty) return Noir.textLow;
-    final type = widget.events.last.type;
-    if (type.contains('ATTACK') || type.contains('SABOTAGE')) return Noir.rose;
-    if (type.contains('BUILD') || type.contains('BOOST')) return Noir.emerald;
-    if (type.contains('BID') || type.contains('DRAIN')) return Noir.amber;
-    if (type.contains('INFILTRATE') || type.contains('PROPAGANDA')) {
-      return Noir.violet;
-    }
-    return Noir.cyan;
-  }
+  // ================================================================
+  //  EVENT TICKER — scrolling bar of this tick's events
+  // ================================================================
 
-  Color _eventColorForCity(String cityId) {
-    final evt = widget.events.lastWhere(
-          (e) => e.target == cityId,
-      orElse: () => EventEntry(type: '', description: ''),
+  Widget _eventTicker() {
+    // Show last 3 events
+    final shown = widget.events.length > 3
+        ? widget.events.sublist(widget.events.length - 3)
+        : widget.events;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0F1E).withOpacity(0.9),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Row(
+        children: [
+          Icon(PhosphorIcons.lightning(PhosphorIconsStyle.fill),
+              color: Noir.amber, size: 11),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              shown.map((e) => e.description).join('  •  '),
+              style: const TextStyle(
+                color: Noir.textMed,
+                fontSize: 9,
+                fontFamily: 'JetBrains Mono',
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
-    if (evt.type.isEmpty) return Noir.surface;
-    // Use the actual event type, not the global last event
-    final type = evt.type;
-    if (type.contains('ATTACK') || type.contains('SABOTAGE')) return Noir.rose;
-    if (type.contains('BUILD') || type.contains('BOOST')) return Noir.emerald;
-    if (type.contains('BID') || type.contains('DRAIN')) return Noir.amber;
-    if (type.contains('INFILTRATE') || type.contains('PROPAGANDA')) return Noir.violet;
-    return Noir.cyan;
+  }
+}
+
+// =============================================================================
+//  CITY CARD WIDGET — compact stat display
+// =============================================================================
+
+class _CityCard extends StatelessWidget {
+  final City city;
+  final Color color;
+  final bool isUnderAttack;
+  final bool isBeingBuilt;
+
+  const _CityCard({
+    required this.city,
+    required this.color,
+    required this.isUnderAttack,
+    required this.isBeingBuilt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = isUnderAttack
+        ? Noir.rose.withOpacity(0.5)
+        : isBeingBuilt
+        ? Noir.emerald.withOpacity(0.4)
+        : Colors.white.withOpacity(0.08);
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111827).withOpacity(0.92),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor, width: isUnderAttack ? 1.5 : 1),
+        boxShadow: [
+          if (isUnderAttack)
+            BoxShadow(color: Noir.rose.withOpacity(0.15), blurRadius: 12),
+          if (isBeingBuilt)
+            BoxShadow(color: Noir.emerald.withOpacity(0.1), blurRadius: 12),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.4),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Row 1: Name + treasury
+          Row(
+            children: [
+              Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: color.withOpacity(0.4), blurRadius: 4)],
+                ),
+              ),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  city.name.toUpperCase(),
+                  style: const TextStyle(
+                    color: Noir.textHigh,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(
+                '\$${city.treasury.toStringAsFixed(0)}',
+                style: TextStyle(
+                  color: Noir.amber.withOpacity(0.8),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'JetBrains Mono',
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 5),
+
+          // Row 2: Mini stat bars
+          _MiniBar(value: city.happiness,       max: 100, color: color,       label: 'HP'),
+          _MiniBar(value: city.infrastructure,   max: 100, color: Noir.cyan,   label: 'INF'),
+          _MiniBar(value: city.digitalDefenses,  max: 100, color: Noir.violet, label: 'DEF'),
+
+          const SizedBox(height: 3),
+
+          // Row 3: Population + GDP
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _fmtPop(city.population),
+                style: const TextStyle(
+                  color: Noir.textLow,
+                  fontSize: 8,
+                  fontFamily: 'JetBrains Mono',
+                ),
+              ),
+              Text(
+                'GDP ${city.economicOutput.toStringAsFixed(1)}',
+                style: const TextStyle(
+                  color: Noir.textLow,
+                  fontSize: 8,
+                  fontFamily: 'JetBrains Mono',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
-  String _fmtPop(int pop) {
+  static String _fmtPop(int pop) {
     if (pop >= 1000000) return '${(pop / 1000000).toStringAsFixed(1)}M';
     if (pop >= 1000) return '${(pop / 1000).toStringAsFixed(0)}K';
     return '$pop';
@@ -413,410 +482,245 @@ class _WorldRenderPanelState extends State<WorldRenderPanel>
 }
 
 // =============================================================================
-//  WORLD MAP PAINTER
+//  MINI BAR — ultra-compact stat bar for city cards
 // =============================================================================
 
-class _WorldMapPainter extends CustomPainter {
+class _MiniBar extends StatelessWidget {
+  final double value;
+  final double max;
+  final Color color;
+  final String label;
+
+  const _MiniBar({
+    required this.value,
+    required this.max,
+    required this.color,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (value / max).clamp(0.0, 1.0);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 20,
+            child: Text(label,
+                style: TextStyle(
+                    color: Noir.textLow.withOpacity(0.7),
+                    fontSize: 7,
+                    fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            child: Container(
+              height: 3,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: pct,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 22,
+            child: Text(
+              value.toStringAsFixed(0),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: color.withOpacity(0.8),
+                fontSize: 7,
+                fontFamily: 'JetBrains Mono',
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+//  AGENT DOT — shows which agents are at a city
+// =============================================================================
+
+class _AgentDot extends StatelessWidget {
+  final String agentId;
+  final bool hasEvent;
+
+  const _AgentDot({required this.agentId, required this.hasEvent});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Noir.agents[agentId] ?? Noir.textMed;
+    final name = agentNames[agentId] ?? agentId;
+
+    return Tooltip(
+      message: name,
+      child: Container(
+        width: 10, height: 10,
+        decoration: BoxDecoration(
+          color: color.withOpacity(hasEvent ? 0.9 : 0.4),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: hasEvent ? Colors.white.withOpacity(0.5) : Colors.transparent,
+            width: 1,
+          ),
+          boxShadow: hasEvent
+              ? [BoxShadow(color: color.withOpacity(0.4), blurRadius: 6)]
+              : [],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+//  MAP PAINTER — connections + action arcs (canvas layer)
+// =============================================================================
+
+class _MapPainter extends CustomPainter {
   final Map<String, City> cities;
   final List<EventEntry> events;
-  final Map<String, List<String>> regionGroups;
-  final Color Function(String) regionColorFn;
+  final Offset Function(String, Size) cityPosFn;
+  final Color Function(String) evtColorFn;
+  final Map<String, String> agentLocations;
   final double animValue;
-  final int tick;
-  final bool hasData;
 
-  _WorldMapPainter({
+  _MapPainter({
     required this.cities,
     required this.events,
-    required this.regionGroups,
-    required this.regionColorFn,
+    required this.cityPosFn,
+    required this.evtColorFn,
+    required this.agentLocations,
     required this.animValue,
-    required this.tick,
-    required this.hasData,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     _drawGrid(canvas, size);
-
-    if (hasData) {
-      _drawRegionZones(canvas, size);
-      _drawConnections(canvas, size);
-      _drawEventRings(canvas, size);
-      _drawCityNodes(canvas, size);
-      _drawAgentPositions(canvas, size);
-    } else {
-      _drawDemoNodes(canvas, size);
-    }
-
-    _drawScanLine(canvas, size);
+    _drawRegionConnections(canvas, size);
+    _drawActionArcs(canvas, size);
   }
 
-  Offset _cityPos(City city, Size size) {
-    final x = (city.tileX / 25.0).clamp(0.05, 0.95);
-    final y = (city.tileY / 22.0).clamp(0.05, 0.95);
-    return Offset(x * size.width, y * size.height);
-  }
-
-  // ---- Grid ----
-
+  // Subtle grid background
   void _drawGrid(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.white.withOpacity(0.02)
+      ..color = Colors.white.withOpacity(0.015)
       ..strokeWidth = 0.5;
 
-    const spacing = 30.0;
+    const spacing = 40.0;
     for (double x = 0; x < size.width; x += spacing) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
     }
     for (double y = 0; y < size.height; y += spacing) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
     }
-
-    final center = Paint()
-      ..color = Colors.white.withOpacity(0.03)
-      ..strokeWidth = 1;
-    canvas.drawLine(
-        Offset(size.width / 2, 0), Offset(size.width / 2, size.height), center);
-    canvas.drawLine(
-        Offset(0, size.height / 2), Offset(size.width, size.height / 2), center);
   }
 
-  // ---- Demo nodes (when no real data) ----
-
-  void _drawDemoNodes(Canvas canvas, Size size) {
-    final rng = Random(42);
-    for (int i = 0; i < 8; i++) {
-      final x = 0.1 + rng.nextDouble() * 0.8;
-      final y = 0.1 + rng.nextDouble() * 0.8;
-      final pos = Offset(x * size.width, y * size.height);
-      final pulse = 1.0 + sin((animValue + i * 0.12) * 2 * pi) * 0.15;
-      final r = 5.0 * pulse;
-
-      canvas.drawCircle(
-          pos,
-          r + 8,
-          Paint()
-            ..color = Noir.primary.withOpacity(0.04)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
-      canvas.drawCircle(
-          pos, r, Paint()..color = Noir.primary.withOpacity(0.08));
-      canvas.drawCircle(
-          pos, r * 0.5, Paint()..color = Noir.primary.withOpacity(0.2));
+  // Lines between cities in the same region
+  void _drawRegionConnections(Canvas canvas, Size size) {
+    // Group by region
+    final groups = <String, List<String>>{};
+    for (final city in cities.values) {
+      final r = city.regionId.isNotEmpty ? city.regionId : 'default';
+      groups.putIfAbsent(r, () => []).add(city.id);
     }
 
-    // Demo connections
-    for (int i = 0; i < 4; i++) {
-      final a = Offset(
-          (0.1 + rng.nextDouble() * 0.8) * size.width,
-          (0.1 + rng.nextDouble() * 0.8) * size.height);
-      final b = Offset(
-          (0.1 + rng.nextDouble() * 0.8) * size.width,
-          (0.1 + rng.nextDouble() * 0.8) * size.height);
-      _drawDashedLine(canvas, a, b, Noir.primary.withOpacity(0.06), 1, 6);
-    }
-  }
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.04)
+      ..strokeWidth = 1
+      ..strokeCap = StrokeCap.round;
 
-  // ---- Region zones ----
-
-  void _drawRegionZones(Canvas canvas, Size size) {
-    for (final entry in regionGroups.entries) {
-      final regionId = entry.key;
-      final cityIds = entry.value;
-      final color = regionColorFn(regionId);
-
-      final positions = <Offset>[];
-      for (final id in cityIds) {
-        final city = cities[id];
-        if (city != null) positions.add(_cityPos(city, size));
-      }
-
-      if (positions.length >= 2) {
-        final center = positions.reduce((a, b) => a + b) /
-            positions.length.toDouble();
-        final radius = positions
-            .map((p) => (p - center).distance)
-            .reduce((a, b) => a > b ? a : b) +
-            50;
-
-        canvas.drawCircle(center, radius,
-            Paint()..color = color.withOpacity(0.03));
-        canvas.drawCircle(
-            center,
-            radius,
-            Paint()
-              ..color = color.withOpacity(0.06)
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 0.5);
-      } else if (positions.length == 1) {
-        canvas.drawCircle(positions[0], 45,
-            Paint()..color = color.withOpacity(0.03));
-      }
-    }
-  }
-
-  // ---- Connections ----
-
-  void _drawConnections(Canvas canvas, Size size) {
-    for (final entry in regionGroups.entries) {
-      final regionId = entry.key;
-      final cityIds = entry.value;
-      final color = regionColorFn(regionId);
-
+    for (final cityIds in groups.values) {
       for (int i = 0; i < cityIds.length; i++) {
         for (int j = i + 1; j < cityIds.length; j++) {
-          final cityA = cities[cityIds[i]];
-          final cityB = cities[cityIds[j]];
-          if (cityA == null || cityB == null) continue;
-
-          final posA = _cityPos(cityA, size);
-          final posB = _cityPos(cityB, size);
-
-          _drawDashedLine(canvas, posA, posB, color.withOpacity(0.2), 1.5, 6);
-
-          // Traveling dot
-          final dotPos = Offset(
-            posA.dx + (posB.dx - posA.dx) * animValue,
-            posA.dy + (posB.dy - posA.dy) * animValue,
-          );
-          canvas.drawCircle(dotPos, 2.5, Paint()..color = color.withOpacity(0.6));
-          canvas.drawCircle(dotPos, 5, Paint()..color = color.withOpacity(0.12));
+          final a = cityPosFn(cityIds[i], size);
+          final b = cityPosFn(cityIds[j], size);
+          canvas.drawLine(a, b, paint);
         }
       }
     }
   }
 
-  void _drawDashedLine(
-      Canvas canvas, Offset a, Offset b, Color color, double width, double gap) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = width
-      ..strokeCap = StrokeCap.round;
+  // Animated arcs for this tick's actions
+  void _drawActionArcs(Canvas canvas, Size size) {
+    for (final evt in events) {
+      if (evt.agent == null || evt.target == null) continue;
+      if (!cities.containsKey(evt.target)) continue;
 
-    final dx = b.dx - a.dx;
-    final dy = b.dy - a.dy;
-    final dist = sqrt(dx * dx + dy * dy);
-    if (dist == 0) return;
-    final steps = (dist / (gap * 2)).floor();
+      // Source = agent's city
+      final agentCity = agentLocations[evt.agent];
+      if (agentCity == null || !cities.containsKey(agentCity)) continue;
+      if (agentCity == evt.target) continue; // same city, skip arc
 
-    for (int i = 0; i < steps; i++) {
-      final startT = (i * gap * 2) / dist;
-      final endT = ((i * gap * 2) + gap) / dist;
-      canvas.drawLine(
-        Offset(a.dx + dx * startT, a.dy + dy * startT),
-        Offset(a.dx + dx * endT, a.dy + dy * endT),
-        paint,
+      final from = cityPosFn(agentCity, size);
+      final to = cityPosFn(evt.target!, size);
+      final color = evtColorFn(evt.type);
+
+      // Curved arc
+      final mid = Offset(
+        (from.dx + to.dx) / 2,
+        min(from.dy, to.dy) - 40,
+      );
+
+      // Draw faint arc path
+      final path = Path()
+        ..moveTo(from.dx, from.dy);
+      path.quadraticBezierTo(mid.dx, mid.dy, to.dx, to.dy);
+
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color.withOpacity(0.12)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+
+      // Animated projectile
+      final t = animValue;
+      final projX = _qBez(from.dx, mid.dx, to.dx, t);
+      final projY = _qBez(from.dy, mid.dy, to.dy, t);
+
+      // Trail
+      for (int j = 0; j < 4; j++) {
+        final tt = (t - j * 0.04).clamp(0.0, 1.0);
+        final tx = _qBez(from.dx, mid.dx, to.dx, tt);
+        final ty = _qBez(from.dy, mid.dy, to.dy, tt);
+        canvas.drawCircle(
+          Offset(tx, ty),
+          2.5 - j * 0.5,
+          Paint()..color = color.withOpacity(0.4 - j * 0.08),
+        );
+      }
+
+      // Projectile head
+      canvas.drawCircle(
+        Offset(projX, projY),
+        3.5,
+        Paint()..color = color.withOpacity(0.8),
       );
     }
   }
 
-  // ---- City nodes ----
-
-  void _drawCityNodes(Canvas canvas, Size size) {
-    for (final city in cities.values) {
-      final pos = _cityPos(city, size);
-
-      final healthColor = city.happiness >= 70
-          ? Noir.emerald
-          : city.happiness >= 40
-          ? Noir.amber
-          : Noir.rose;
-
-      final baseRadius =
-          6.0 + (log(max(1, city.population)) / log(10)) * 1.5;
-      final pulse = 1.0 + sin(animValue * 2 * pi) * 0.12;
-      final radius = baseRadius * pulse;
-
-      // Outer glow
-      canvas.drawCircle(
-          pos,
-          radius + 10,
-          Paint()
-            ..color = healthColor.withOpacity(0.06 + animValue * 0.03)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-
-      // Mid ring
-      canvas.drawCircle(
-          pos,
-          radius + 4,
-          Paint()
-            ..color = healthColor.withOpacity(0.08)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 0.5);
-
-      // Core
-      canvas.drawCircle(pos, radius, Paint()..color = healthColor.withOpacity(0.2));
-      canvas.drawCircle(
-          pos, radius * 0.6, Paint()..color = healthColor.withOpacity(0.8));
-
-      // Defense ring
-      if (city.digitalDefenses > 60) {
-        final angle = animValue * 2 * pi;
-        canvas.drawArc(
-          Rect.fromCircle(center: pos, radius: radius + 7),
-          angle,
-          pi * 0.6,
-          false,
-          Paint()
-            ..color = Noir.cyan.withOpacity(0.3)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.5
-            ..strokeCap = StrokeCap.round,
-        );
-      }
-    }
-  }
-
-  // ---- Agent positions (left side of map) ----
-
-  void _drawAgentPositions(Canvas canvas, Size size) {
-    final agentIds = ['agent-0', 'agent-1', 'agent-2', 'agent-3', 'agent-4'];
-    final spacing = size.height / (agentIds.length + 1);
-
-    for (int i = 0; i < agentIds.length; i++) {
-      final id = agentIds[i];
-      final color = Noir.agents[id] ?? Noir.textMed;
-      final y = spacing * (i + 1);
-      final x = size.width * 0.04;
-      final pos = Offset(x, y);
-
-      // Check if this agent has events this tick
-      final agentEvts = events.where((e) => e.agent == id).toList();
-      final isActive = agentEvts.isNotEmpty;
-
-      // Agent dot
-      final dotRadius = isActive ? 5.0 : 3.0;
-      final pulseR = isActive ? dotRadius + sin(animValue * 2 * pi) * 2 : dotRadius;
-
-      if (isActive) {
-        canvas.drawCircle(
-            pos,
-            pulseR + 6,
-            Paint()
-              ..color = color.withOpacity(0.1)
-              ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
-      }
-
-      canvas.drawCircle(pos, pulseR, Paint()..color = color.withOpacity(isActive ? 0.9 : 0.3));
-
-      // Draw attack arcs from agent to target cities
-      for (final evt in agentEvts) {
-        if (evt.target == null) continue;
-        final targetCity = cities[evt.target];
-        if (targetCity == null) continue;
-
-        final targetPos = _cityPos(targetCity, size);
-        final evtColor = _evtColor(evt.type);
-
-        // Bezier arc
-        final mid = Offset(
-          (pos.dx + targetPos.dx) / 2,
-          min(pos.dy, targetPos.dy) - 30,
-        );
-
-        // Projectile
-        final t = animValue;
-        final projX = _quadBezier(pos.dx, mid.dx, targetPos.dx, t);
-        final projY = _quadBezier(pos.dy, mid.dy, targetPos.dy, t);
-
-        // Trail
-        for (int j = 0; j < 5; j++) {
-          final tt = (t - j * 0.03).clamp(0.0, 1.0);
-          final tx = _quadBezier(pos.dx, mid.dx, targetPos.dx, tt);
-          final ty = _quadBezier(pos.dy, mid.dy, targetPos.dy, tt);
-          canvas.drawCircle(
-            Offset(tx, ty),
-            2.0 - j * 0.3,
-            Paint()..color = evtColor.withOpacity(0.3 - j * 0.05),
-          );
-        }
-
-        canvas.drawCircle(
-            Offset(projX, projY), 3, Paint()..color = evtColor.withOpacity(0.7));
-      }
-    }
-  }
-
-  double _quadBezier(double p0, double p1, double p2, double t) {
+  double _qBez(double p0, double p1, double p2, double t) {
     return (1 - t) * (1 - t) * p0 + 2 * (1 - t) * t * p1 + t * t * p2;
   }
 
-  // ---- Event rings ----
-
-  void _drawEventRings(Canvas canvas, Size size) {
-    for (final evt in events) {
-      if (evt.target == null) continue;
-      final city = cities[evt.target];
-      if (city == null) continue;
-
-      final pos = _cityPos(city, size);
-      final color = _evtColor(evt.type);
-
-      // Expanding ring
-      final ringRadius = 15.0 + animValue * 40.0;
-      final ringOpacity = (1.0 - animValue) * 0.4;
-      canvas.drawCircle(
-          pos,
-          ringRadius,
-          Paint()
-            ..color = color.withOpacity(ringOpacity.clamp(0.0, 1.0))
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2);
-
-      // Second ring (offset phase)
-      final ring2Anim = (animValue + 0.3) % 1.0;
-      canvas.drawCircle(
-          pos,
-          15.0 + ring2Anim * 40.0,
-          Paint()
-            ..color = color.withOpacity(((1.0 - ring2Anim) * 0.2).clamp(0.0, 1.0))
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1);
-    }
-  }
-
-  // ---- Scan line ----
-
-  void _drawScanLine(Canvas canvas, Size size) {
-    final y = animValue * size.height;
-
-    final paint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.white.withOpacity(0.0),
-          Noir.primary.withOpacity(hasData ? 0.03 : 0.015),
-          Colors.white.withOpacity(0.0),
-        ],
-      ).createShader(Rect.fromLTWH(0, y - 30, size.width, 60));
-
-    canvas.drawRect(Rect.fromLTWH(0, y - 30, size.width, 60), paint);
-
-    canvas.drawLine(
-        Offset(0, y),
-        Offset(size.width, y),
-        Paint()
-          ..color = Noir.primary.withOpacity(0.08)
-          ..strokeWidth = 1);
-  }
-
-  Color _evtColor(String type) {
-    if (type.contains('ATTACK') || type.contains('SABOTAGE') ||
-        type.contains('UNREST')) {
-      return Noir.rose;
-    }
-    if (type.contains('BUILD') || type.contains('BOOST') ||
-        type.contains('DEFEND') || type.contains('INJECT')) {
-      return Noir.emerald;
-    }
-    if (type.contains('BID') || type.contains('DRAIN')) return Noir.amber;
-    if (type.contains('INFILTRATE') || type.contains('PROPAGANDA')) {
-      return Noir.violet;
-    }
-    return Noir.cyan;
-  }
-
   @override
-  bool shouldRepaint(covariant _WorldMapPainter old) => true;
+  bool shouldRepaint(covariant _MapPainter old) =>
+      animValue != old.animValue ||
+          events.length != old.events.length ||
+          cities.length != old.cities.length;
 }

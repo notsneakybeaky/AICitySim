@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 
@@ -215,18 +216,11 @@ AVAILABLE ACTIONS:
 Valid city IDs: nexus, ironhold, freeport, eden, vault
 Valid agent IDs: {valid_agents_str}
 
-Return ONLY valid JSON:
-{{
-  "internal_thought": "<private reasoning, 1-3 sentences>",
-  "actions": [
-    {{
-      "type": "<ACTION_TYPE>",
-      "target_id": "<city_id or agent_id or null>",
-      "params": {{}},
-      "reasoning": "<why, 1 sentence>"
-    }}
-  ]
-}}"""
+RESPONSE FORMAT: Return ONLY a JSON object with this exact structure (no extra text):
+{{"internal_thought": "your private reasoning here", "actions": [{{"type": "ACTION_NAME", "target_id": "target_here_or_null", "params": {{}}, "reasoning": "why"}}]}}
+
+Example valid response:
+{{"internal_thought": "I should build up my city", "actions": [{{"type": "BUILD_INFRASTRUCTURE", "target_id": "nexus", "params": {{"amount": 10}}, "reasoning": "Strengthen my base"}}]}}"""
 
 
 def build_alliance_prompt(req: AllianceRequest) -> str:
@@ -245,18 +239,24 @@ Their terms: "{req.alliance_terms}"
 
 Should you accept? Does this help your priorities? Are they trustworthy? Could they betray you?
 
-Return ONLY valid JSON:
-{{
-  "accept": <true or false>,
-  "reasoning": "<1-2 sentences>"
-}}"""
+RESPONSE FORMAT: Return ONLY a JSON object like this (no extra text):
+{{"accept": true, "reasoning": "short explanation"}}"""
 
 
 # =============================================================================
 #  GEMINI CALLER
 # =============================================================================
 
-async def call_gemini_json(prompt: str, retries: int = 3) -> dict:
+async def call_gemini_json(prompt: str, retries: int = 2) -> dict:
+    """Call Gemini and extract valid JSON from the response.
+
+    Uses multiple strategies:
+    1. response_mime_type for structured output
+    2. Markdown fence stripping
+    3. Regex-based JSON extraction as fallback
+    4. Lenient parsing for trailing commas etc.
+    """
+    last_error = None
     for attempt in range(retries):
         try:
             response = await asyncio.to_thread(
@@ -264,23 +264,69 @@ async def call_gemini_json(prompt: str, retries: int = 3) -> dict:
                 prompt,
                 generation_config=genai.GenerationConfig(
                     response_mime_type="application/json",
-                    temperature=0.8,
-                    max_output_tokens=2048,
+                    temperature=0.7,  # lower = more reliable JSON
+                    max_output_tokens=1024,  # shorter = less chance of truncation
                 ),
             )
+
             text = response.text.strip()
+
+            # Strip markdown fences
             if text.startswith("```json"):
                 text = text[7:]
             if text.startswith("```"):
                 text = text[3:]
             if text.endswith("```"):
                 text = text[:-3]
-            return json.loads(text.strip())
-        except (json.JSONDecodeError, Exception) as e:
+            text = text.strip()
+
+            # Try direct parse first
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                pass
+
+            # Fix common Gemini JSON issues:
+            # - Trailing commas before } or ]
+            cleaned = re.sub(r',\s*([}\]])', r'\1', text)
+            # - Single quotes instead of double
+            # (only if no double quotes present — crude but helps)
+            if '"' not in cleaned and "'" in cleaned:
+                cleaned = cleaned.replace("'", '"')
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                pass
+
+            # Last resort: extract the first JSON object from the text
+            match = re.search(r'\{[\s\S]*\}', text)
+            if match:
+                candidate = match.group(0)
+                candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError as e:
+                    last_error = e
+                    print(f"[AI] Attempt {attempt + 1} JSON extraction failed: {e}")
+                    print(f"[AI] Raw text (first 300 chars): {text[:300]}")
+            else:
+                last_error = ValueError("No JSON object found in response")
+                print(f"[AI] Attempt {attempt + 1}: no JSON object in response")
+                print(f"[AI] Raw text (first 300 chars): {text[:300]}")
+
+        except Exception as e:
+            last_error = e
             print(f"[AI] Attempt {attempt + 1} failed: {e}")
-            if attempt == retries - 1:
-                raise HTTPException(status_code=502, detail=f"Gemini parse failed: {e}")
-            await asyncio.sleep(1)
+
+        if attempt < retries - 1:
+            await asyncio.sleep(1.0)  # flat 1s backoff — keep total under 15s
+
+    # All retries exhausted — return a safe fallback instead of crashing
+    print(f"[AI] All {retries} attempts failed, returning NO_OP fallback")
+    return {
+        "internal_thought": f"AI parse failed after {retries} attempts: {last_error}",
+        "actions": [{"type": "NO_OP", "reasoning": "AI response was unparseable"}]
+    }
 
 
 # =============================================================================
@@ -411,6 +457,99 @@ async def health():
 async def roster():
     """Returns agent names and colors — Flutter can pull this once on startup."""
     return AGENT_ROSTER
+
+
+# =============================================================================
+#  NARRATOR — 6th AI agent, unbiased tick summarizer
+# =============================================================================
+
+class NarrationRequest(BaseModel):
+    tick: int
+    events: list[dict]
+    world_summary: dict
+    economy_summary: dict
+    agent_thoughts: dict = {}
+
+
+class NarrationResponse(BaseModel):
+    tick: int
+    narration: str
+
+
+async def call_gemini_text(prompt: str) -> str:
+    """Simple text call for narration — no JSON needed, just plain English."""
+    try:
+        response = await asyncio.to_thread(
+            model.generate_content,
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.6,
+                max_output_tokens=300,
+            ),
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"[NARRATOR] Gemini call failed: {e}")
+        return "The world turns. Events unfold beyond the narrator's sight."
+
+
+def build_narration_prompt(req: NarrationRequest) -> str:
+    # Summarize events into a compact list
+    event_lines = []
+    for evt in req.events[:15]:  # cap at 15 events to keep prompt short
+        desc = evt.get("description", "")
+        if desc:
+            event_lines.append(f"- {desc}")
+    events_text = "\n".join(event_lines) if event_lines else "- No significant events."
+
+    # Summarize city states
+    cities_text = ""
+    cities = req.world_summary.get("cities", {})
+    for city_id, city in cities.items():
+        name = city.get("name", city_id)
+        happiness = city.get("happiness", "?")
+        treasury = city.get("treasury", "?")
+        cities_text += f"  {name}: happiness={happiness}, treasury=${treasury}\n"
+
+    # Market
+    market = req.economy_summary.get("market", {})
+    price = market.get("price", "?")
+    demand = market.get("current_demand", "?")
+    supply = market.get("total_supply", "?")
+
+    return f"""You are the Narrator of a city-building economic simulation. You are NOT a player — you are a neutral observer. Your job is to summarize what happened this tick in 2-3 short, engaging sentences that a viewer can quickly read.
+
+Rules:
+- Be neutral and unbiased. Don't take sides.
+- Use agent names (The Grinder, The Shark, etc.), not IDs.
+- Focus on the most impactful events — attacks, big trades, alliances, city collapses.
+- If nothing interesting happened, say so briefly.
+- Never give strategy advice. Just report what happened.
+- Keep it under 50 words.
+
+TICK {req.tick} EVENTS:
+{events_text}
+
+CITY STATUS:
+{cities_text}
+MARKET: Price=${price}, Demand={demand}, Supply={supply}
+
+Write your summary now (2-3 sentences, under 50 words):"""
+
+
+@app.post("/ai/narrate", response_model=NarrationResponse)
+async def narrate_tick(req: NarrationRequest):
+    prompt = build_narration_prompt(req)
+    narration = await call_gemini_text(prompt)
+
+    # Clean up any quotes or extra formatting
+    narration = narration.strip().strip('"').strip()
+    if len(narration) > 500:
+        narration = narration[:497] + "..."
+
+    print(f"[NARRATOR] Tick {req.tick}: {narration[:80]}...")
+
+    return NarrationResponse(tick=req.tick, narration=narration)
 
 
 # =============================================================================

@@ -319,6 +319,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
                           events: _events,
                           tick: _tick,
                           phase: _phase,
+                          agentLocations: _agentLocations,
                         ),
                       ),
                       Expanded(flex: 4, child: _buildCityPanel()),

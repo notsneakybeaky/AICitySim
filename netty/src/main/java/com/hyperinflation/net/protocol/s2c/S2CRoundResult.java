@@ -14,7 +14,8 @@ public record S2CRoundResult(
         Map<String, Object> economyState,
         List<Map<String, Object>> events,
         Map<String, String> thoughts,
-        Map<String, String> locations
+        Map<String, String> locations,
+        String narration
 ) implements Packet {
 
     @Override public int getPacketId() { return 0x08; }
@@ -29,6 +30,7 @@ public record S2CRoundResult(
         m.put("events",    events);
         m.put("thoughts",  thoughts);
         m.put("locations", locations);
+        m.put("narration", narration != null ? narration : "");
         return m;
     }
 }

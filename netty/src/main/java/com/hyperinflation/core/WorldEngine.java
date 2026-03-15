@@ -39,6 +39,7 @@ public final class WorldEngine {
     private Phase phase       = Phase.IDLE;
 
     private final Map<String, String> lastThoughts = new LinkedHashMap<>();
+    private volatile String lastNarration = "";
 
     private static final String[] AGENT_START_CITIES = {
             "nexus",    // agent-0 The Grinder
@@ -110,6 +111,9 @@ public final class WorldEngine {
 
     public void shutdown() { executor.shutdown(); }
 
+    private static final long TICK_DEADLINE_SECONDS = 30;
+    private static final long PER_AGENT_TIMEOUT_SECONDS = 25;
+
     private void runTick() {
         currentTick++;
         phase = Phase.COLLECTING;
@@ -131,46 +135,80 @@ public final class WorldEngine {
             }
         }
 
-        // 2. Sequential AI agent chain (avoids Gemini 429 rate limits)
-        CompletableFuture<List<Action>> sequentialChain =
-                CompletableFuture.completedFuture(new ArrayList<>(moduleActions));
-
-        for (Agent agent : agents) {
-            if (!agent.isAlive()) continue;
-
-            AgentEconomy agentEcon = economy.getAgentEconomy(agent.getId());
-            String       agentCity = actionProcessor.getAgentLocation(agent.getId());
-
-            sequentialChain = sequentialChain.thenCompose(accumulated ->
-                    aiClient.requestTurnAsync(agent, agentEcon, world, economy, agents,
-                                    currentTick, agentCity, actionProcessor.getAllLocations())
-                            .orTimeout(12, TimeUnit.SECONDS)
-                            .handle((actions, err) -> {
-                                if (err != null) {
-                                    log("AI FAILED for " + agent.getId() + ": " + err.getMessage());
-                                    agent.getMemory().record(currentTick, "AI_CALL", "system",
-                                            false, 0.0, "AI call failed: " + err.getMessage());
-                                    accumulated.add(Action.noOp("ai-fallback"));
-                                } else if (actions != null) {
-                                    accumulated.addAll(actions);
-                                }
-                                return accumulated;
-                            })
-            );
+        // 2. Fire ALL agent AI calls in parallel with individual timeouts.
+        //    Each call is independent — one agent's failure cannot block another.
+        List<Agent> aliveAgents = new ArrayList<>();
+        for (Agent a : agents) {
+            if (a.isAlive()) aliveAgents.add(a);
         }
 
-        sequentialChain.whenComplete((allActions, err) ->
-                executor.execute(() -> {
-                    if (allActions == null) {
-                        log("FATAL: action chain returned null (err=" + err + ")");
-                        phase = Phase.IDLE;
-                        executor.schedule(this::runTick, 5, TimeUnit.SECONDS);
-                        return;
+        // Create one future per agent, each with its own timeout + fallback
+        @SuppressWarnings("unchecked")
+        CompletableFuture<List<Action>>[] agentFutures = new CompletableFuture[aliveAgents.size()];
+
+        for (int i = 0; i < aliveAgents.size(); i++) {
+            Agent agent = aliveAgents.get(i);
+            AgentEconomy agentEcon = economy.getAgentEconomy(agent.getId());
+            String agentCity = actionProcessor.getAgentLocation(agent.getId());
+
+            agentFutures[i] = aiClient.requestTurnAsync(
+                            agent, agentEcon, world, economy, agents,
+                            currentTick, agentCity, actionProcessor.getAllLocations())
+                    .orTimeout(PER_AGENT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .handle((actions, err) -> {
+                        if (err != null) {
+                            log("AI FAILED for " + agent.getId() + ": " + err.getMessage());
+                            agent.getMemory().record(currentTick, "AI_CALL", "system",
+                                    false, 0.0, "AI call failed: " + err.getMessage());
+                            return List.of(Action.noOp("ai-fallback"));
+                        }
+                        if (actions == null || actions.isEmpty()) {
+                            log("AI returned null/empty for " + agent.getId() + ", using NO_OP");
+                            return List.of(Action.noOp("ai-null-guard"));
+                        }
+                        return actions;
+                    });
+        }
+
+        // 3. Wait for ALL agents with a hard tick deadline.
+        //    allOf completes when every future has resolved (success or fallback).
+        CompletableFuture<Void> allDone = CompletableFuture.allOf(agentFutures);
+
+        allDone
+                .orTimeout(TICK_DEADLINE_SECONDS, TimeUnit.SECONDS)
+                .whenComplete((ignored, tickErr) -> executor.execute(() -> {
+                    // Gather results — every future is guaranteed resolved via .handle()
+                    List<Action> allActions = new ArrayList<>(moduleActions);
+
+                    for (int i = 0; i < agentFutures.length; i++) {
+                        try {
+                            List<Action> result = agentFutures[i].getNow(null);
+                            if (result != null) {
+                                allActions.addAll(result);
+                            } else {
+                                // Tick deadline hit before this agent finished
+                                Agent agent = aliveAgents.get(i);
+                                log("TIMEOUT: " + agent.getId() + " did not respond in time, using NO_OP");
+                                agent.getMemory().record(currentTick, "TIMEOUT", "system",
+                                        false, 0.0, "Tick deadline exceeded");
+                                allActions.add(Action.noOp("tick-timeout"));
+                            }
+                        } catch (Exception e) {
+                            allActions.add(Action.noOp("tick-error"));
+                            log("Error collecting result for agent " + i + ": " + e.getMessage());
+                        }
                     }
-                    log("Collected " + allActions.size() + " actions sequentially");
+
+                    if (tickErr != null) {
+                        log("TICK DEADLINE HIT (" + TICK_DEADLINE_SECONDS + "s) — proceeding with "
+                                + allActions.size() + " actions collected so far");
+                    } else {
+                        log("All " + aliveAgents.size() + " agents responded. "
+                                + allActions.size() + " total actions.");
+                    }
+
                     processTick(allActions);
-                })
-        );
+                }));
     }
 
     private void processTick(List<Action> actions) {
@@ -232,6 +270,25 @@ public final class WorldEngine {
 
         phase = Phase.BROADCASTING;
         log("BROADCASTING (" + actionProcessor.getEvents().size() + " events)");
+
+        // Fire narrator AI call (non-blocking — doesn't delay the tick)
+        // Uses previous tick's narration for THIS broadcast, updates for next tick
+        aiClient.requestNarrationAsync(
+                        currentTick,
+                        actionProcessor.getEvents(),
+                        world.toSummaryMap(),
+                        economy.toMap(),
+                        new LinkedHashMap<>(lastThoughts))
+                .orTimeout(8, TimeUnit.SECONDS)
+                .whenComplete((narration, err) -> {
+                    if (narration != null && !narration.isEmpty()) {
+                        lastNarration = narration;
+                        log("NARRATOR: " + narration);
+                    } else if (err != null) {
+                        log("Narrator failed (non-fatal): " + err.getMessage());
+                    }
+                });
+
         broadcastRoundResult();
 
         phase = Phase.IDLE;
@@ -274,7 +331,8 @@ public final class WorldEngine {
                 economy.toMap(),
                 actionProcessor.getEvents(),
                 new LinkedHashMap<>(lastThoughts),
-                new LinkedHashMap<>(actionProcessor.getAllLocations())
+                new LinkedHashMap<>(actionProcessor.getAllLocations()),
+                lastNarration
         );
 
         if (connectionManager != null) {
@@ -296,6 +354,7 @@ public final class WorldEngine {
     public List<Map<String, Object>> getEvents()          { return actionProcessor.getEvents(); }
     public ModuleRegistry            getModuleRegistry()  { return moduleRegistry; }
     public ActionProcessor           getActionProcessor() { return actionProcessor; }
+    public String                    getNarration()       { return lastNarration; }
 
     private Agent findAgent(String id) {
         for (Agent a : agents) if (a.getId().equals(id)) return a;

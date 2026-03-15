@@ -143,6 +143,32 @@ public final class PythonAiClient {
     }
 
     // =====================================================================
+    //  NARRATOR — 6th AI, unbiased tick summarizer
+    // =====================================================================
+
+    public CompletableFuture<String> requestNarrationAsync(
+            int tick,
+            List<Map<String, Object>> events,
+            Map<String, Object> worldSummary,
+            Map<String, Object> economySummary,
+            Map<String, String> agentThoughts) {
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("tick", tick);
+        body.put("events", events);
+        body.put("world_summary", worldSummary);
+        body.put("economy_summary", economySummary);
+        body.put("agent_thoughts", agentThoughts);
+
+        return postJson(baseUrl + "/ai/narrate", body)
+                .thenApply(json -> json.path("narration").asText(""))
+                .exceptionally(err -> {
+                    System.err.println("[AI-CLIENT] Narration failed: " + err.getMessage());
+                    return "";
+                });
+    }
+
+    // =====================================================================
     //  HEALTH CHECK
     // =====================================================================
 
@@ -167,7 +193,7 @@ public final class PythonAiClient {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(120))
+                    .timeout(Duration.ofSeconds(30))
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                     .build();
 
