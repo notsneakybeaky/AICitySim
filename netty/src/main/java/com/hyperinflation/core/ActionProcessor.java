@@ -82,6 +82,15 @@ public final class ActionProcessor {
                 break;
             }
 
+            case PLACE_ASK: {
+                double price = action.param("price", 1.0);
+                int    qty   = (int) action.param("quantity", 10);
+                economy.placeAsk(agentId, price, qty);
+                event("ASK", agentId, targetId,
+                        agentId + " ask " + qty + " prompts @ $" + f(price));
+                break;
+            }
+
             case MOVE_TO: {
                 // Agent moves to a new city
                 // Cost: $1 per tile of distance
@@ -125,10 +134,18 @@ public final class ActionProcessor {
 
             case DAMAGE_INFRASTRUCTURE: {
                 if (city == null) break;
-                double amt = action.param("amount", 5.0);
+                double amt  = action.param("amount", 5.0);
+                double cost = amt * 1.5 * distanceCostMultiplier(agentId, targetId);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford SABOTAGE in " + city.getName()
+                                    + " (need $" + f(cost) + ")");
+                    break;
+                }
                 city.adjustInfrastructure(-amt);
                 event("SABOTAGE", agentId, targetId,
-                        agentId + " sabotaged " + city.getName() + " infra -" + f(amt));
+                        agentId + " sabotaged " + city.getName() + " infra -" + f(amt)
+                                + " (-$" + f(cost) + ")");
                 break;
             }
 
@@ -150,10 +167,18 @@ public final class ActionProcessor {
 
             case DAMAGE_HAPPINESS: {
                 if (city == null) break;
-                double amt = action.param("amount", 5.0);
+                double amt  = action.param("amount", 5.0);
+                double cost = amt * 1.0 * distanceCostMultiplier(agentId, targetId);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford UNREST in " + city.getName()
+                                    + " (need $" + f(cost) + ")");
+                    break;
+                }
                 city.adjustHappiness(-amt);
                 event("UNREST", agentId, targetId,
-                        agentId + " caused unrest in " + city.getName() + " -" + f(amt));
+                        agentId + " caused unrest in " + city.getName() + " -" + f(amt)
+                                + " (-$" + f(cost) + ")");
                 break;
             }
 
@@ -192,32 +217,57 @@ public final class ActionProcessor {
 
             case INFILTRATE: {
                 if (city == null) break;
-                double amt       = action.param("amount", 3.0);
+                double amt  = action.param("amount", 3.0);
+                double cost = amt * 2.0 * distanceCostMultiplier(agentId, targetId);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford INFILTRATE in " + city.getName()
+                                    + " (need $" + f(cost) + ")");
+                    break;
+                }
                 double effective = city.receiveInfiltrate(amt);
                 event("INFILTRATE", agentId, targetId,
                         agentId + " infiltrated " + city.getName()
-                                + " (req=" + f(amt) + " eff=" + f(effective) + ")");
+                                + " (req=" + f(amt) + " eff=" + f(effective)
+                                + " -$" + f(cost) + ")");
                 break;
             }
 
             case SPREAD_PROPAGANDA: {
                 if (city == null) break;
-                double amt       = action.param("amount", 3.0);
+                double amt  = action.param("amount", 3.0);
+                double cost = amt * 1.5 * distanceCostMultiplier(agentId, targetId);
+                if (econ != null && !econ.spend(cost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford PROPAGANDA in " + city.getName()
+                                    + " (need $" + f(cost) + ")");
+                    break;
+                }
                 double effective = city.receivePropaganda(amt);
                 event("PROPAGANDA", agentId, targetId,
                         agentId + " spread propaganda in " + city.getName()
-                                + " (req=" + f(amt) + " eff=" + f(effective) + ")");
+                                + " (req=" + f(amt) + " eff=" + f(effective)
+                                + " -$" + f(cost) + ")");
                 break;
             }
 
             case DRAIN_TREASURY: {
                 if (city == null) break;
-                double amt    = action.param("amount", 10.0);
+                double amt      = action.param("amount", 10.0);
+                double mult     = distanceCostMultiplier(agentId, targetId);
+                double overhead = amt * 0.2 * mult;
+                if (econ != null && !econ.spend(overhead)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford DRAIN on " + city.getName()
+                                    + " (overhead $" + f(overhead) + ")");
+                    break;
+                }
                 double actual = Math.min(amt, Math.max(0, city.getTreasury()));
                 city.adjustTreasury(-actual);
                 if (econ != null) econ.earn(actual);
                 event("DRAIN", agentId, targetId,
-                        agentId + " drained $" + f(actual) + " from " + city.getName());
+                        agentId + " drained $" + f(actual) + " from " + city.getName()
+                                + " (overhead -$" + f(overhead) + ")");
                 break;
             }
 
@@ -259,6 +309,7 @@ public final class ActionProcessor {
         e.put("type",        type);
         e.put("agent",       agent);
         e.put("target",      target);
+        e.put("source_city", agent != null ? agentLocations.get(agent) : null);
         e.put("description", desc);
         e.put("ts",          System.currentTimeMillis());
         events.add(e);
