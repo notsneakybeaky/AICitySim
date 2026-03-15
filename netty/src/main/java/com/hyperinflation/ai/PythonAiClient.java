@@ -184,6 +184,50 @@ public final class PythonAiClient {
     }
 
     // =====================================================================
+    //  DEBATE — Post-game argumentation system
+    // =====================================================================
+
+    /** Agent opening statement — defends their strategy. */
+    public CompletableFuture<String> requestDebateOpening(Map<String, Object> body) {
+        return postJson(baseUrl + "/ai/debate/opening", body)
+                .thenApply(json -> json.path("statement").asText("No statement."))
+                .exceptionally(err -> {
+                    System.err.println("[AI-CLIENT] Debate opening failed: " + err.getMessage());
+                    return "I have no comment at this time.";
+                });
+    }
+
+    /** Agent rebuttal — attacks others, defends self. */
+    public CompletableFuture<String> requestDebateRebuttal(Map<String, Object> body) {
+        return postJson(baseUrl + "/ai/debate/rebuttal", body)
+                .thenApply(json -> json.path("statement").asText("No rebuttal."))
+                .exceptionally(err -> {
+                    System.err.println("[AI-CLIENT] Debate rebuttal failed: " + err.getMessage());
+                    return "I stand by my opening statement.";
+                });
+    }
+
+    /** Narrator thesis — the final verdict. Returns full JSON with thesis + winner. */
+    public CompletableFuture<Map<String, String>> requestDebateThesis(Map<String, Object> body) {
+        return postJson(baseUrl + "/ai/debate/thesis", body)
+                .thenApply(json -> {
+                    Map<String, String> result = new LinkedHashMap<>();
+                    result.put("thesis", json.path("thesis").asText("No thesis generated."));
+                    result.put("winner_id", json.path("winner_id").asText("unknown"));
+                    result.put("winner_name", json.path("winner_name").asText("Unknown"));
+                    return result;
+                })
+                .exceptionally(err -> {
+                    System.err.println("[AI-CLIENT] Debate thesis failed: " + err.getMessage());
+                    Map<String, String> fallback = new LinkedHashMap<>();
+                    fallback.put("thesis", "The simulation concluded but the narrator was unable to render a verdict.");
+                    fallback.put("winner_id", "unknown");
+                    fallback.put("winner_name", "Unknown");
+                    return fallback;
+                });
+    }
+
+    // =====================================================================
     //  INTERNAL
     // =====================================================================
 

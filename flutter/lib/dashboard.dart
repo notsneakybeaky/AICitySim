@@ -62,6 +62,13 @@ class _WorldDashboardState extends State<WorldDashboard> {
   Map<String, int> _territory = {};
   GridSnapshot _grid = GridSnapshot(width: 25, height: 22, terrain: '', owners: '');
 
+  // Debate state
+  Map<String, String> _debateOpenings = {};
+  Map<String, String> _debateRebuttals = {};
+  String _debateThesis = '';
+  String _debateWinnerId = '';
+  String _debateWinnerName = '';
+
   @override
   void initState() {
     super.initState();
@@ -86,6 +93,17 @@ class _WorldDashboardState extends State<WorldDashboard> {
       case S2C.phaseChange:
         _tick = (pkt.data['tick'] is num) ? (pkt.data['tick'] as num).toInt() : _tick;
         _phase = pkt.data['phase']?.toString() ?? _phase;
+        // Parse debate phases — data comes in world_summary field
+        final ws = pkt.data['world_summary'];
+        if (_phase == 'DEBATE_OPENING' && ws is Map<String, dynamic>) {
+          _debateOpenings = ws.map((k, v) => MapEntry(k, v.toString()));
+        } else if (_phase == 'DEBATE_REBUTTAL' && ws is Map<String, dynamic>) {
+          _debateRebuttals = ws.map((k, v) => MapEntry(k, v.toString()));
+        } else if (_phase == 'DEBATE_THESIS' && ws is Map<String, dynamic>) {
+          _debateThesis = ws['thesis']?.toString() ?? '';
+          _debateWinnerId = ws['winner_id']?.toString() ?? '';
+          _debateWinnerName = ws['winner_name']?.toString() ?? '';
+        }
 
       case S2C.roundResult:
         _tick = (pkt.data['tick'] is num) ? (pkt.data['tick'] as num).toInt() : _tick;
@@ -134,9 +152,10 @@ class _WorldDashboardState extends State<WorldDashboard> {
 
   @override
   Widget build(BuildContext context) {
+    final isDebate = _phase.startsWith('DEBATE_');
     return Scaffold(backgroundColor: Noir.bg, body: Column(children: [
       _header(),
-      Expanded(child: Row(children: [
+      Expanded(child: isDebate ? _debateScreen() : Row(children: [
         // LEFT: Map + Agent strip
         Expanded(flex: 7, child: Column(children: [
           Expanded(child: Padding(padding: const EdgeInsets.fromLTRB(8, 4, 4, 2),
@@ -273,6 +292,175 @@ class _WorldDashboardState extends State<WorldDashboard> {
       ]),
     );
   }
+
+  // ==================================================================
+  //  DEBATE SCREEN — replaces game view after tick 50
+  // ==================================================================
+
+  Widget _debateScreen() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Center(child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Title
+          Center(child: Column(children: [
+            const SizedBox(height: 12),
+            Text('SIMULATION COMPLETE', style: TextStyle(color: Noir.primary, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 4)),
+            const SizedBox(height: 4),
+            Text('TICK $_tick — POST-GAME DEBATE', style: const TextStyle(color: Noir.textLow, fontSize: 10, letterSpacing: 2)),
+            const SizedBox(height: 20),
+          ])),
+
+          // Final standings
+          _debateLeaderboard(),
+          const SizedBox(height: 24),
+
+          // Opening statements
+          if (_debateOpenings.isNotEmpty) ...[
+            _debateSectionTitle('ROUND 1 — OPENING STATEMENTS', Noir.cyan),
+            const SizedBox(height: 10),
+            ..._debateOpenings.entries.map((e) => _debateBubble(e.key, e.value, Noir.agent(e.key))),
+            const SizedBox(height: 20),
+          ],
+
+          // Loading indicator if waiting for next phase
+          if (_debateOpenings.isNotEmpty && _debateRebuttals.isEmpty && _phase != 'DEBATE_THESIS')
+            _debateLoading('Agents preparing rebuttals...'),
+
+          // Rebuttals
+          if (_debateRebuttals.isNotEmpty) ...[
+            _debateSectionTitle('ROUND 2 — REBUTTALS', Noir.amber),
+            const SizedBox(height: 10),
+            ..._debateRebuttals.entries.map((e) => _debateBubble(e.key, e.value, Noir.agent(e.key))),
+            const SizedBox(height: 20),
+          ],
+
+          // Loading indicator if waiting for thesis
+          if (_debateRebuttals.isNotEmpty && _debateThesis.isEmpty)
+            _debateLoading('Narrator writing thesis...'),
+
+          // Thesis
+          if (_debateThesis.isNotEmpty) ...[
+            _debateSectionTitle('THE THESIS', Noir.primary),
+            const SizedBox(height: 10),
+            // Winner announcement
+            if (_debateWinnerName.isNotEmpty)
+              Center(child: Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                decoration: BoxDecoration(
+                  gradient: Noir.primaryGrad, borderRadius: BorderRadius.circular(8),
+                  boxShadow: [BoxShadow(color: Noir.primary.withOpacity(0.3), blurRadius: 16)],
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(PhosphorIcons.trophy(PhosphorIconsStyle.fill), color: Noir.amber, size: 18),
+                  const SizedBox(width: 10),
+                  Text('WINNER: $_debateWinnerName', style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 1)),
+                ]),
+              )),
+            // Thesis text
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.04),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Noir.primary.withOpacity(0.2)),
+              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Icon(PhosphorIcons.scroll(PhosphorIconsStyle.fill), color: Noir.primary, size: 16),
+                  const SizedBox(width: 8),
+                  const Text('NARRATOR', style: TextStyle(color: Noir.primary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+                ]),
+                const SizedBox(height: 12),
+                Text(_debateThesis, style: const TextStyle(color: Noir.textHigh, fontSize: 13, height: 1.6)),
+              ]),
+            ),
+            const SizedBox(height: 40),
+          ],
+
+          // Waiting for openings
+          if (_debateOpenings.isEmpty)
+            _debateLoading('Agents preparing opening statements...'),
+        ]),
+      )),
+    );
+  }
+
+  Widget _debateLeaderboard() {
+    if (_economy.agentEconomies.isEmpty) return const SizedBox();
+    final sorted = _economy.agentEconomies.entries.toList()
+      ..sort((a, b) => b.value.wallet.compareTo(a.value.wallet));
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withOpacity(0.06))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(PhosphorIcons.trophy(PhosphorIconsStyle.fill), color: Noir.amber, size: 14),
+          const SizedBox(width: 8),
+          const Text('FINAL STANDINGS', style: TextStyle(color: Noir.textLow, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+        ]),
+        const SizedBox(height: 12),
+        ...sorted.asMap().entries.map((entry) {
+          final rank = entry.key + 1;
+          final id = entry.value.key;
+          final econ = entry.value.value;
+          final color = Noir.agent(id);
+          final name = agentNames[id] ?? id;
+          return Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [
+            SizedBox(width: 24, child: Text('#$rank', style: TextStyle(color: rank == 1 ? Noir.amber : Noir.textLow, fontSize: 12, fontWeight: FontWeight.w800, fontFamily: 'JetBrains Mono'))),
+            Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+            const SizedBox(width: 8),
+            Expanded(child: Text(name, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700))),
+            Text('\$${econ.wallet.toStringAsFixed(1)}', style: TextStyle(color: econ.inDebt ? Noir.rose : Noir.emerald, fontSize: 13, fontWeight: FontWeight.w800, fontFamily: 'JetBrains Mono')),
+          ]));
+        }),
+      ]),
+    );
+  }
+
+  Widget _debateSectionTitle(String title, Color color) => Row(children: [
+    Container(width: 3, height: 16, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+    const SizedBox(width: 10),
+    Text(title, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 2)),
+  ]);
+
+  Widget _debateBubble(String agentId, String statement, Color color) {
+    final name = agentNames[agentId] ?? agentId;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.15)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 28, height: 28, decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(7), border: Border.all(color: color.withOpacity(0.3))),
+              child: Center(child: Text(name[0], style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 13)))),
+          const SizedBox(width: 10),
+          Text(name, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12)),
+          const Spacer(),
+          Text(agentId, style: const TextStyle(color: Noir.textLow, fontSize: 9)),
+        ]),
+        const SizedBox(height: 10),
+        Text('"$statement"', style: const TextStyle(color: Noir.textHigh, fontSize: 12, fontStyle: FontStyle.italic, height: 1.5)),
+      ]),
+    );
+  }
+
+  Widget _debateLoading(String msg) => Center(child: Padding(
+    padding: const EdgeInsets.symmetric(vertical: 24),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Noir.primary.withOpacity(0.5))),
+      const SizedBox(height: 10),
+      Text(msg, style: TextStyle(color: Noir.textLow.withOpacity(0.6), fontSize: 10, fontStyle: FontStyle.italic)),
+    ]),
+  ));
 
   // ==================================================================
   //  RIGHT PANEL — Leaderboard + Price Chart + Events

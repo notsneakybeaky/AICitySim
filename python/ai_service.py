@@ -526,30 +526,42 @@ class NarrationResponse(BaseModel):
     narration: str
 
 
-async def call_gemini_text(prompt: str) -> str:
-    """Simple text call for narration — no JSON needed, just plain English."""
+async def call_gemini_text(prompt: str, max_tokens: int = 1024) -> str:
+    """Simple text call — no JSON needed, just plain English."""
     try:
         response = await asyncio.to_thread(
             model.generate_content,
             prompt,
             generation_config=genai.GenerationConfig(
                 temperature=0.6,
-                max_output_tokens=300,
+                max_output_tokens=max_tokens,
             ),
         )
         return response.text.strip()
     except Exception as e:
-        print(f"[NARRATOR] Gemini call failed: {e}")
+        print(f"[AI-TEXT] Gemini call failed: {e}")
         return "The world turns. Events unfold beyond the narrator's sight."
 
 
 def build_narration_prompt(req: NarrationRequest) -> str:
+    # Agent ID to name mapping
+    id_to_name = {
+        "agent-0": "The Grinder", "agent-1": "The Shark",
+        "agent-2": "The Diplomat", "agent-3": "The Gambler",
+        "agent-4": "The Architect",
+    }
+
+    def replace_ids(text: str) -> str:
+        for aid, name in id_to_name.items():
+            text = text.replace(aid, name)
+        return text
+
     # Summarize events into a compact list
     event_lines = []
-    for evt in req.events[:15]:  # cap at 15 events to keep prompt short
+    for evt in req.events[:15]:
         desc = evt.get("description", "")
         if desc:
-            event_lines.append(f"- {desc}")
+            event_lines.append(f"- {replace_ids(desc)}")
     events_text = "\n".join(event_lines) if event_lines else "- No significant events."
 
     # Summarize city states
@@ -569,9 +581,17 @@ def build_narration_prompt(req: NarrationRequest) -> str:
 
     return f"""You are the Narrator of a city-building economic simulation. You are NOT a player — you are a neutral observer. Your job is to summarize what happened this tick in 2-3 short, engaging sentences that a viewer can quickly read.
 
+AGENT NAME MAPPING (use ONLY these names, never invent new ones):
+  agent-0 = The Grinder
+  agent-1 = The Shark
+  agent-2 = The Diplomat
+  agent-3 = The Gambler
+  agent-4 = The Architect
+
 Rules:
 - Be neutral and unbiased. Don't take sides.
-- Use agent names (The Grinder, The Shark, etc.), not IDs.
+- Use the EXACT agent names above. Replace any "agent-0" with "The Grinder", etc.
+- NEVER invent names like "The Shadow", "The Saboteur", "The Disruptor" — these do not exist.
 - Focus on the most impactful events — attacks, big trades, alliances, city collapses.
 - If nothing interesting happened, say so briefly.
 - Never give strategy advice. Just report what happened.
@@ -590,7 +610,7 @@ Write your summary now (2-3 sentences, under 50 words):"""
 @app.post("/ai/narrate", response_model=NarrationResponse)
 async def narrate_tick(req: NarrationRequest):
     prompt = build_narration_prompt(req)
-    narration = await call_gemini_text(prompt)
+    narration = await call_gemini_text(prompt, max_tokens=2048)
 
     # Clean up any quotes or extra formatting
     narration = narration.strip().strip('"').strip()
@@ -638,6 +658,200 @@ async def rate_legacy(req: RateRequest):
     print(f"[AI] WARNING: Legacy /ai/rate called by {req.agent_id}")
     grades = {p["agent_id"]: 0.0 for p in req.proposals if p["agent_id"] != req.own_agent_id}
     return {"agent_id": req.agent_id, "grades": grades}
+
+
+# =============================================================================
+#  DEBATE SYSTEM — Post-game AI argumentation + thesis generation
+# =============================================================================
+
+class DebateOpeningRequest(BaseModel):
+    agent_id: str
+    personality_name: str
+    personality_description: str
+    priorities: str
+    wallet_history: list[float]       # wallet at each tick
+    final_wallet: float
+    total_actions: int
+    action_summary: dict              # {"BUILD": 12, "ATTACK": 3, ...}
+    city_states: dict                 # final city stats
+    all_agent_wallets: dict           # {"agent-0": 340.5, ...}
+    event_highlights: list[str]       # key events involving this agent
+    territory_counts: dict            # {"nexus": 28, ...}
+    final_tick: int
+
+
+class DebateRebuttalRequest(BaseModel):
+    agent_id: str
+    personality_name: str
+    personality_description: str
+    priorities: str
+    own_opening: str
+    other_openings: dict              # {"agent-1": "statement...", ...}
+    final_wallet: float
+    all_agent_wallets: dict
+
+
+class DebateThesisRequest(BaseModel):
+    all_openings: dict                # {"agent-0": "...", ...}
+    all_rebuttals: dict               # {"agent-0": "...", ...}
+    wallet_histories: dict            # {"agent-0": [100, 105, ...], ...}
+    city_states: dict
+    territory_counts: dict
+    event_log_summary: str            # compressed event history
+    final_tick: int
+
+
+@app.post("/ai/debate/opening")
+async def debate_opening(req: DebateOpeningRequest):
+    """Each agent argues why their strategy was the best."""
+
+    wallet_trend = "grew" if req.final_wallet > 100 else "shrank"
+    top_actions = sorted(req.action_summary.items(), key=lambda x: -x[1])[:5]
+    actions_text = ", ".join(f"{a}: {n}x" for a, n in top_actions)
+
+    prompt = f"""You are "{req.personality_name}" in a post-game debate about an AI economic simulation.
+Description: {req.personality_description}
+Your priorities: {req.priorities}
+
+THE GAME IS OVER AFTER {req.final_tick} TICKS. You must now defend your strategy.
+
+=== YOUR PERFORMANCE ===
+Final wallet: ${req.final_wallet:.2f} (started at $100, {wallet_trend})
+Total actions taken: {req.total_actions}
+Top actions: {actions_text}
+Key moments: {'; '.join(req.event_highlights[:8])}
+
+=== FINAL STANDINGS (wallets) ===
+{chr(10).join(f"  {aid}: ${w:.2f}" for aid, w in sorted(req.all_agent_wallets.items(), key=lambda x: -x[1]))}
+
+=== CITY STATES ===
+{json.dumps(req.city_states, indent=2)[:600]}
+
+=== TERRITORY ===
+{json.dumps(req.territory_counts)}
+
+=== YOUR TASK ===
+Give a 60-80 word opening statement defending YOUR strategy. Argue why your approach was the smartest.
+- Reference specific actions you took and their outcomes
+- Connect your strategy to a real-world economic theory (Nash equilibrium, tragedy of the commons, Keynesian stimulus, predatory pricing, mercantilism, etc.)
+- If you didn't win on wallet, argue why wallet isn't the only measure of success
+- Stay in character. Be bold, be specific, be persuasive.
+
+Respond with ONLY your statement as plain text. No JSON, no quotes, no preamble."""
+
+    statement = await call_gemini_text(prompt, max_tokens=2048)
+    statement = statement.strip().strip('"').strip()
+    if len(statement) > 1500:
+        statement = statement[:1497] + "..."
+
+    print(f"[DEBATE] Opening from {req.agent_id}: {statement[:80]}...")
+    return {"agent_id": req.agent_id, "statement": statement}
+
+
+@app.post("/ai/debate/rebuttal")
+async def debate_rebuttal(req: DebateRebuttalRequest):
+    """Each agent responds to others' opening statements."""
+
+    others_text = ""
+    for aid, stmt in req.other_openings.items():
+        name = AGENT_ROSTER.get(aid, {}).get("name", aid)
+        others_text += f"\n{name} ({aid}): \"{stmt}\"\n"
+
+    prompt = f"""You are "{req.personality_name}" in a heated post-game debate.
+Your priorities: {req.priorities}
+Your wallet: ${req.final_wallet:.2f}
+
+YOUR OPENING STATEMENT WAS:
+"{req.own_opening}"
+
+THE OTHER AGENTS SAID:
+{others_text}
+
+=== FINAL STANDINGS ===
+{chr(10).join(f"  {aid}: ${w:.2f}" for aid, w in sorted(req.all_agent_wallets.items(), key=lambda x: -x[1]))}
+
+=== YOUR TASK ===
+Write a 50-70 word rebuttal. You must:
+- Call out the weakest argument from another agent BY NAME
+- Defend your own strategy against any criticism
+- Reference real economic theory to support your point
+- Be sharp, specific, and stay in character
+
+Respond with ONLY your rebuttal as plain text."""
+
+    statement = await call_gemini_text(prompt, max_tokens=2048)
+    statement = statement.strip().strip('"').strip()
+    if len(statement) > 1500:
+        statement = statement[:1497] + "..."
+
+    print(f"[DEBATE] Rebuttal from {req.agent_id}: {statement[:80]}...")
+    return {"agent_id": req.agent_id, "statement": statement}
+
+
+@app.post("/ai/debate/thesis")
+async def debate_thesis(req: DebateThesisRequest):
+    """The narrator writes the final thesis based on the full debate + data."""
+
+    openings_text = ""
+    for aid, stmt in req.all_openings.items():
+        name = AGENT_ROSTER.get(aid, {}).get("name", aid)
+        openings_text += f"{name}: \"{stmt}\"\n"
+
+    rebuttals_text = ""
+    for aid, stmt in req.all_rebuttals.items():
+        name = AGENT_ROSTER.get(aid, {}).get("name", aid)
+        rebuttals_text += f"{name}: \"{stmt}\"\n"
+
+    # Find winner by wallet
+    wallets = {aid: hist[-1] if hist else 0 for aid, hist in req.wallet_histories.items()}
+    winner_id = max(wallets, key=wallets.get)
+    winner_name = AGENT_ROSTER.get(winner_id, {}).get("name", winner_id)
+
+    prompt = f"""You are the Narrator of an AI economic simulation. The game has ended after {req.final_tick} ticks. Five AI agents with different personalities competed for limited resources across five cities. You must now write the definitive thesis on what happened and why.
+
+=== FINAL WALLETS ===
+{chr(10).join(f"  {AGENT_ROSTER.get(aid, {}).get('name', aid)}: ${w:.2f}" for aid, w in sorted(wallets.items(), key=lambda x: -x[1]))}
+
+=== TERRITORY ===
+{json.dumps(req.territory_counts)}
+
+=== CITY STATES ===
+{json.dumps(req.city_states, indent=2)[:800]}
+
+=== EVENT SUMMARY ===
+{req.event_log_summary[:600]}
+
+=== OPENING STATEMENTS ===
+{openings_text}
+
+=== REBUTTALS ===
+{rebuttals_text}
+
+=== YOUR TASK ===
+Write a 150-200 word thesis that:
+
+1. DECLARES A WINNER and explains why they won (consider wallet, territory, city health, not just money)
+2. Connects the winning strategy to a specific real-world economic theory (Nash equilibrium, Keynesian economics, predatory capitalism, tragedy of the commons, mercantilism, game theory, etc.)
+3. Identifies the KEY TURNING POINT — which specific decision or tick changed the outcome
+4. Evaluates whether COOPERATION or COMPETITION was more effective
+5. Makes a broader claim about what this simulation reveals about economic behavior
+
+Be analytical, cite the agents by name, reference their actual arguments from the debate.
+Write as a neutral academic observer. This is your thesis — make it sharp.
+
+Respond with ONLY the thesis as plain text."""
+
+    thesis = await call_gemini_text(prompt, max_tokens=4096)
+    thesis = thesis.strip().strip('"').strip()
+    if len(thesis) > 3000:
+        thesis = thesis[:2997] + "..."
+
+    print(f"[DEBATE] THESIS: {thesis[:120]}...")
+    return {
+        "thesis": thesis,
+        "winner_id": winner_id,
+        "winner_name": winner_name,
+    }
 
 
 if __name__ == "__main__":

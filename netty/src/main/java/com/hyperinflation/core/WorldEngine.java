@@ -41,6 +41,11 @@ public final class WorldEngine {
     private final Map<String, String> lastThoughts = new LinkedHashMap<>();
     private volatile String lastNarration = "";
 
+    // ---- Debate system ----
+    private static final int MAX_TICKS = 25;
+    private final Map<String, List<Double>> walletHistory = new LinkedHashMap<>();
+    private final Map<String, Map<String, Integer>> actionCounts = new LinkedHashMap<>();
+
     private static final String[] AGENT_START_CITIES = {
             "nexus",    // agent-0 The Grinder
             "vault",    // agent-1 The Shark
@@ -230,16 +235,18 @@ public final class WorldEngine {
                     if (agent != null) {
                         String location = actionProcessor.getAgentLocation(action.getAgentId());
                         String target   = action.getTargetId() != null ? action.getTargetId() : "none";
-                        // Rich memory via AgentMemory
                         agent.getMemory().record(
                                 currentTick,
                                 action.getType().name(),
                                 target,
-                                true,   // success (not blocked)
+                                true,
                                 0.0,
                                 location != null ? "at " + location : "no location"
                         );
                     }
+                    // Track action counts for post-game debate
+                    actionCounts.computeIfAbsent(action.getAgentId(), k -> new LinkedHashMap<>())
+                            .merge(action.getType().name(), 1, Integer::sum);
                 }
             } catch (Exception e) {
                 log("Action error: " + e.getMessage());
@@ -265,6 +272,9 @@ public final class WorldEngine {
                                 + " price=$" + String.format("%.2f", economy.getPromptPrice())
                                 + (location != null ? " loc=" + location : "")
                 );
+                // Track wallet history for post-game debate
+                walletHistory.computeIfAbsent(agent.getId(), k -> new ArrayList<>())
+                        .add(econ.getWallet());
             }
         }
 
@@ -291,9 +301,16 @@ public final class WorldEngine {
 
         broadcastRoundResult();
 
-        phase = Phase.IDLE;
-        log("=== Tick " + currentTick + " done ===\n");
-        executor.schedule(this::runTick, 2, TimeUnit.SECONDS);
+        if (currentTick >= MAX_TICKS) {
+            phase = Phase.IDLE;
+            log("=== SIMULATION COMPLETE at tick " + currentTick + " ===");
+            broadcastPhase("DEBATE_STARTING");
+            executor.schedule(this::startDebate, 3, TimeUnit.SECONDS);
+        } else {
+            phase = Phase.IDLE;
+            log("=== Tick " + currentTick + " done ===\n");
+            executor.schedule(this::runTick, 2, TimeUnit.SECONDS);
+        }
     }
 
     // ==================================================================
@@ -335,6 +352,209 @@ public final class WorldEngine {
                 lastNarration
         );
 
+        if (connectionManager != null) {
+            connectionManager.broadcastPacket(pkt);
+        }
+    }
+
+    // ==================================================================
+    //  POST-GAME DEBATE — runs after tick 50
+    // ==================================================================
+
+    private void startDebate() {
+        log("=== DEBATE PHASE 1: Opening Statements ===");
+
+        // Build shared context
+        Map<String, Double> allWallets = new LinkedHashMap<>();
+        for (Agent a : agents) {
+            AgentEconomy econ = economy.getAgentEconomy(a.getId());
+            allWallets.put(a.getId(), econ != null ? econ.getWallet() : 0.0);
+        }
+
+        Map<String, Object> cityStates = new LinkedHashMap<>();
+        for (Map.Entry<String, com.hyperinflation.world.City> e : world.getCities().entrySet()) {
+            Map<String, Object> cs = new LinkedHashMap<>();
+            com.hyperinflation.world.City c = e.getValue();
+            cs.put("name", c.getName());
+            cs.put("happiness", c.getHappiness());
+            cs.put("infrastructure", c.getInfrastructure());
+            cs.put("defenses", c.getDigitalDefenses());
+            cs.put("treasury", c.getTreasury());
+            cs.put("population", c.getPopulation());
+            cityStates.put(e.getKey(), cs);
+        }
+
+        Map<String, Integer> territoryCounts = new LinkedHashMap<>();
+        for (String cid : world.getCities().keySet()) {
+            territoryCounts.put(cid, world.getWorldMap().countTilesForCity(cid));
+        }
+
+        // Collect event highlights per agent
+        Map<String, List<String>> eventHighlights = new LinkedHashMap<>();
+        for (Map<String, Object> evt : actionProcessor.getEvents()) {
+            String agentId = (String) evt.get("agent");
+            String desc = (String) evt.get("description");
+            if (agentId != null && desc != null) {
+                eventHighlights.computeIfAbsent(agentId, k -> new ArrayList<>()).add(desc);
+            }
+        }
+
+        // Phase 1: Opening statements (parallel)
+        Map<String, String> openings = new LinkedHashMap<>();
+        @SuppressWarnings("unchecked")
+        CompletableFuture<Void>[] openingFutures = new CompletableFuture[agents.size()];
+
+        for (int i = 0; i < agents.size(); i++) {
+            Agent agent = agents.get(i);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("agent_id", agent.getId());
+            body.put("personality_name", agent.getPersonality().name);
+            body.put("personality_description", agent.getPersonality().description);
+            body.put("priorities", agent.getPersonality().priorities);
+            body.put("wallet_history", walletHistory.getOrDefault(agent.getId(), List.of()));
+            AgentEconomy econ = economy.getAgentEconomy(agent.getId());
+            body.put("final_wallet", econ != null ? econ.getWallet() : 0.0);
+            Map<String, Integer> ac = actionCounts.getOrDefault(agent.getId(), Map.of());
+            body.put("total_actions", ac.values().stream().mapToInt(Integer::intValue).sum());
+            body.put("action_summary", ac);
+            body.put("city_states", cityStates);
+            body.put("all_agent_wallets", allWallets);
+            body.put("event_highlights", eventHighlights.getOrDefault(agent.getId(), List.of()));
+            body.put("territory_counts", territoryCounts);
+            body.put("final_tick", currentTick);
+
+            final int idx = i;
+            openingFutures[i] = aiClient.requestDebateOpening(body)
+                    .orTimeout(20, TimeUnit.SECONDS)
+                    .thenAccept(statement -> {
+                        synchronized (openings) {
+                            openings.put(agent.getId(), statement);
+                        }
+                        log("OPENING [" + agent.getPersonality().name + "]: " + statement);
+                    });
+        }
+
+        CompletableFuture.allOf(openingFutures)
+                .orTimeout(30, TimeUnit.SECONDS)
+                .whenComplete((v, err) -> executor.execute(() -> {
+                    if (err != null) log("Some openings timed out: " + err.getMessage());
+                    broadcastDebatePhase("DEBATE_OPENING", openings);
+                    log("=== Opening statements broadcast ===");
+
+                    // Phase 2: Rebuttals (after a pause)
+                    executor.schedule(() -> runRebuttals(openings, allWallets, cityStates, territoryCounts),
+                            4, TimeUnit.SECONDS);
+                }));
+    }
+
+    private void runRebuttals(
+            Map<String, String> openings,
+            Map<String, Double> allWallets,
+            Map<String, Object> cityStates,
+            Map<String, Integer> territoryCounts) {
+
+        log("=== DEBATE PHASE 2: Rebuttals ===");
+
+        Map<String, String> rebuttals = new LinkedHashMap<>();
+        @SuppressWarnings("unchecked")
+        CompletableFuture<Void>[] rebuttalFutures = new CompletableFuture[agents.size()];
+
+        for (int i = 0; i < agents.size(); i++) {
+            Agent agent = agents.get(i);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("agent_id", agent.getId());
+            body.put("personality_name", agent.getPersonality().name);
+            body.put("personality_description", agent.getPersonality().description);
+            body.put("priorities", agent.getPersonality().priorities);
+            body.put("own_opening", openings.getOrDefault(agent.getId(), ""));
+            Map<String, String> others = new LinkedHashMap<>(openings);
+            others.remove(agent.getId());
+            body.put("other_openings", others);
+            AgentEconomy econ = economy.getAgentEconomy(agent.getId());
+            body.put("final_wallet", econ != null ? econ.getWallet() : 0.0);
+            body.put("all_agent_wallets", allWallets);
+
+            rebuttalFutures[i] = aiClient.requestDebateRebuttal(body)
+                    .orTimeout(20, TimeUnit.SECONDS)
+                    .thenAccept(statement -> {
+                        synchronized (rebuttals) {
+                            rebuttals.put(agent.getId(), statement);
+                        }
+                        log("REBUTTAL [" + agent.getPersonality().name + "]: " + statement);
+                    });
+        }
+
+        CompletableFuture.allOf(rebuttalFutures)
+                .orTimeout(30, TimeUnit.SECONDS)
+                .whenComplete((v, err) -> executor.execute(() -> {
+                    if (err != null) log("Some rebuttals timed out: " + err.getMessage());
+                    broadcastDebatePhase("DEBATE_REBUTTAL", rebuttals);
+                    log("=== Rebuttals broadcast ===");
+
+                    // Phase 3: Thesis
+                    executor.schedule(() -> runThesis(openings, rebuttals, allWallets,
+                            cityStates, territoryCounts), 4, TimeUnit.SECONDS);
+                }));
+    }
+
+    private void runThesis(
+            Map<String, String> openings,
+            Map<String, String> rebuttals,
+            Map<String, Double> allWallets,
+            Map<String, Object> cityStates,
+            Map<String, Integer> territoryCounts) {
+
+        log("=== DEBATE PHASE 3: Thesis ===");
+
+        // Build compressed event summary
+        StringBuilder evtSummary = new StringBuilder();
+        Map<String, Integer> typeCounts = new LinkedHashMap<>();
+        for (Map<String, Object> evt : actionProcessor.getEvents()) {
+            String type = (String) evt.get("type");
+            if (type != null) typeCounts.merge(type, 1, Integer::sum);
+        }
+        typeCounts.forEach((t, c) -> evtSummary.append(t).append(": ").append(c).append("x, "));
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("all_openings", openings);
+        body.put("all_rebuttals", rebuttals);
+        body.put("wallet_histories", walletHistory);
+        body.put("city_states", cityStates);
+        body.put("territory_counts", territoryCounts);
+        body.put("event_log_summary", evtSummary.toString());
+        body.put("final_tick", currentTick);
+
+        aiClient.requestDebateThesis(body)
+                .orTimeout(30, TimeUnit.SECONDS)
+                .whenComplete((rawResult, err) -> executor.execute(() -> {
+                    Map<String, String> result;
+                    if (err != null || rawResult == null) {
+                        log("Thesis generation failed: " + (err != null ? err.getMessage() : "null result"));
+                        result = new LinkedHashMap<>();
+                        result.put("thesis", "The narrator was unable to render a verdict.");
+                        result.put("winner_id", "unknown");
+                        result.put("winner_name", "Unknown");
+                    } else {
+                        result = rawResult;
+                    }
+
+                    log("=== THESIS: " + result.get("thesis"));
+                    log("=== WINNER: " + result.get("winner_name") + " ===");
+
+                    broadcastDebatePhase("DEBATE_THESIS", result);
+
+                    log("=== SIMULATION AND DEBATE COMPLETE ===");
+                }));
+    }
+
+    /**
+     * Broadcast debate data using S2CPhaseChange.
+     * The worldSummary field carries the debate statements.
+     */
+    private void broadcastDebatePhase(String phaseName, Map<String, String> data) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.putAll(data);
+        S2CPhaseChange pkt = new S2CPhaseChange(currentTick, phaseName, payload);
         if (connectionManager != null) {
             connectionManager.broadcastPacket(pkt);
         }
