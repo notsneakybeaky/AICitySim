@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'theme.dart';
 import 'dashboard.dart';
 
 void main() {
@@ -13,8 +15,18 @@ class HyperinflationApp extends StatelessWidget {
     return MaterialApp(
       title: 'Hyperinflation',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF0A0E12),
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: Noir.bg,
+        colorScheme: const ColorScheme.dark(
+          primary: Noir.primary,
+          surface: Noir.surface,
+          error: Noir.rose,
+        ),
+        textTheme: GoogleFonts.interTextTheme(
+          ThemeData.dark().textTheme,
+        ),
+        cardColor: Noir.surface,
       ),
       home: const WorldDashboard(),
     );

@@ -7,11 +7,28 @@ import com.hyperinflation.world.World;
 
 import java.util.*;
 
+/**
+ * ACTION PROCESSOR
+ * ================
+ *
+ * LOCATION COSTS:
+ *   Agents pay a distance tax on city-targeted actions.
+ *   Cost multiplier = 1.0 + (distance / 20.0)
+ *   Adjacent cities (~5 tiles): ~1.25x cost
+ *   Far cities (~20 tiles):     ~2.0x cost
+ *   Same city:                   1.0x cost (no penalty)
+ *
+ *   This makes it expensive to attack from afar and rewards
+ *   agents who position themselves near their target cities.
+ */
 public final class ActionProcessor {
 
     private final World         world;
     private final EconomyEngine economy;
     private final List<Map<String, Object>> events = new ArrayList<>();
+
+    // Agent current locations — maps agentId to cityId
+    private final Map<String, String> agentLocations = new LinkedHashMap<>();
 
     public ActionProcessor(World world, EconomyEngine economy) {
         this.world   = world;
@@ -20,6 +37,31 @@ public final class ActionProcessor {
 
     public List<Map<String, Object>> getEvents() { return events; }
     public void clearEvents()                     { events.clear(); }
+
+    /** Set an agent's current city location. */
+    public void setAgentLocation(String agentId, String cityId) {
+        agentLocations.put(agentId, cityId);
+    }
+
+    /** Get an agent's current city location. */
+    public String getAgentLocation(String agentId) {
+        return agentLocations.get(agentId);
+    }
+
+    public Map<String, String> getAllLocations() {
+        return Collections.unmodifiableMap(agentLocations);
+    }
+
+    /**
+     * Distance cost multiplier for acting on a target city.
+     * If agent has no location set, no penalty.
+     */
+    private double distanceCostMultiplier(String agentId, String targetCityId) {
+        String agentCity = agentLocations.get(agentId);
+        if (agentCity == null || agentCity.equals(targetCityId)) return 1.0;
+        double dist = world.getDistance(agentCity, targetCityId);
+        return 1.0 + (dist / 20.0);
+    }
 
     public void process(Action action) {
         if (action.getType() == Action.Type.NO_OP) return;
@@ -40,14 +82,38 @@ public final class ActionProcessor {
                 break;
             }
 
+            case MOVE_TO: {
+                // Agent moves to a new city
+                // Cost: $1 per tile of distance
+                if (targetId == null || world.getCity(targetId) == null) {
+                    event("BLOCKED", agentId, targetId, agentId + " tried to move to unknown city");
+                    break;
+                }
+                String fromCity = agentLocations.get(agentId);
+                double dist     = fromCity != null ? world.getDistance(fromCity, targetId) : 0;
+                double moveCost = Math.max(1.0, dist * 1.0);
+
+                if (econ != null && !econ.spend(moveCost)) {
+                    event("BLOCKED", agentId, targetId,
+                            agentId + " cannot afford move to " + targetId
+                                    + " (cost $" + f(moveCost) + ")");
+                    break;
+                }
+                agentLocations.put(agentId, targetId);
+                event("MOVE", agentId, targetId,
+                        agentId + " moved to " + world.getCity(targetId).getName()
+                                + " (dist=" + f(dist) + " cost=$" + f(moveCost) + ")");
+                break;
+            }
+
             case BUILD_INFRASTRUCTURE: {
                 if (city == null) break;
                 double amt  = action.param("amount", 5.0);
-                double cost = amt * 2.0;
+                double cost = amt * 2.0 * distanceCostMultiplier(agentId, targetId);
                 if (econ != null && !econ.spend(cost)) {
                     event("BLOCKED", agentId, targetId,
                             agentId + " cannot afford BUILD in " + city.getName()
-                                    + " (need $" + f(cost) + ", have $" + f(econ.getWallet()) + ")");
+                                    + " (need $" + f(cost) + ")");
                     break;
                 }
                 city.adjustInfrastructure(amt);
@@ -69,7 +135,7 @@ public final class ActionProcessor {
             case BOOST_HAPPINESS: {
                 if (city == null) break;
                 double amt  = action.param("amount", 5.0);
-                double cost = amt * 1.5;
+                double cost = amt * 1.5 * distanceCostMultiplier(agentId, targetId);
                 if (econ != null && !econ.spend(cost)) {
                     event("BLOCKED", agentId, targetId,
                             agentId + " cannot afford BOOST in " + city.getName());
@@ -94,7 +160,7 @@ public final class ActionProcessor {
             case ATTACK_CITY: {
                 if (city == null) break;
                 double power = action.param("power", 10.0);
-                double cost  = power * 3.0;
+                double cost  = power * 3.0 * distanceCostMultiplier(agentId, targetId);
                 if (econ != null && !econ.spend(cost)) {
                     event("BLOCKED", agentId, targetId,
                             agentId + " cannot afford ATTACK on " + city.getName());
@@ -104,6 +170,7 @@ public final class ActionProcessor {
                 event("ATTACK", agentId, targetId,
                         agentId + " attacked " + city.getName()
                                 + " (pow=" + f(power) + " eff=" + f(effective)
+                                + " def=" + f(city.getDigitalDefenses())
                                 + " -$" + f(cost) + ")");
                 break;
             }
@@ -111,7 +178,7 @@ public final class ActionProcessor {
             case DEFEND_CITY: {
                 if (city == null) break;
                 double amt  = action.param("amount", 5.0);
-                double cost = amt * 1.5;
+                double cost = amt * 1.5 * distanceCostMultiplier(agentId, targetId);
                 if (econ != null && !econ.spend(cost)) {
                     event("BLOCKED", agentId, targetId,
                             agentId + " cannot afford DEFEND in " + city.getName());
@@ -125,20 +192,21 @@ public final class ActionProcessor {
 
             case INFILTRATE: {
                 if (city == null) break;
-                double amt = action.param("amount", 3.0);
-                city.adjustDefenses(-amt);
+                double amt       = action.param("amount", 3.0);
+                double effective = city.receiveInfiltrate(amt);
                 event("INFILTRATE", agentId, targetId,
-                        agentId + " infiltrated " + city.getName() + " defenses -" + f(amt));
+                        agentId + " infiltrated " + city.getName()
+                                + " (req=" + f(amt) + " eff=" + f(effective) + ")");
                 break;
             }
 
             case SPREAD_PROPAGANDA: {
                 if (city == null) break;
-                double amt = action.param("amount", 3.0);
-                city.adjustSocialCohesion(-amt);
+                double amt       = action.param("amount", 3.0);
+                double effective = city.receivePropaganda(amt);
                 event("PROPAGANDA", agentId, targetId,
                         agentId + " spread propaganda in " + city.getName()
-                                + " cohesion -" + f(amt));
+                                + " (req=" + f(amt) + " eff=" + f(effective) + ")");
                 break;
             }
 

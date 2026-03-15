@@ -1,7 +1,25 @@
 package com.hyperinflation.econ;
 
+import com.hyperinflation.world.World;
+
 import java.util.*;
 
+/**
+ * ECONOMY ENGINE
+ * ==============
+ *
+ * SUPPLY is now driven by city infrastructure:
+ *   totalSupply = base + sum(city.supplyContribution)
+ *   High infrastructure cities produce more prompt supply capacity.
+ *
+ * DEMAND is now driven by city happiness + social cohesion:
+ *   totalDemand = base * avgDemandMultiplier * gdpBonus
+ *   Happy, cohesive cities buy more prompts.
+ *   Low cohesion INVERTS happiness → demand suppression even in "happy" cities.
+ *
+ * PRICE floats based on supply/demand ratio as before.
+ * TOTAL_PROMPT_VALUE grows with world GDP — the pie gets bigger as cities prosper.
+ */
 public final class EconomyEngine {
 
     public static double TOTAL_PROMPT_VALUE = 1000.0;
@@ -27,25 +45,35 @@ public final class EconomyEngine {
         bids.put(agentId, new double[]{price, quantity});
     }
 
-    /** Run one tick of the prompt economy. */
-    public void tick() {
-        // 1. Simulate demand (humans prompting)
-        int baseDemand = (int) (TOTAL_PROMPT_VALUE / Math.max(0.01, promptPrice));
-        int noise      = rng.nextInt(Math.max(1, baseDemand / 5)) - baseDemand / 10;
-        currentDemand  = Math.max(10, baseDemand + noise);
+    /**
+     * Run one tick of the prompt economy.
+     * World is passed in so supply and demand can be derived from city stats.
+     */
+    public void tick(World world) {
 
-        // 2. Total supply from bids
-        int    totalBidQty = 0;
-        double totalBidVal = 0;
+        // 1. Supply = base + infrastructure contribution from all cities
+        double infraSupply   = world.getTotalSupplyContribution();
+        int    baseSupply    = EconomyConfig.TOTAL_PROMPT_SUPPLY;
+        int    worldSupply   = baseSupply + (int) infraSupply;
+
+        // 2. Demand = base scaled by world happiness/cohesion and GDP
+        double demandMult    = world.getAverageDemandMultiplier(); // 0.5 to 1.2
+        double gdpBonus      = 1.0 + (world.getTotalEconomicOutput() / 500.0); // GDP expands market
+        int    baseDemand    = (int) (TOTAL_PROMPT_VALUE / Math.max(0.01, promptPrice));
+        int    noise         = rng.nextInt(Math.max(1, baseDemand / 5)) - baseDemand / 10;
+        currentDemand        = Math.max(10, (int) (baseDemand * demandMult * gdpBonus) + noise);
+
+        // 3. Total supply from agent bids (agents provide capacity on top of world supply)
+        int    totalBidQty   = 0;
+        double totalBidVal   = 0;
         for (double[] bid : bids.values()) {
             totalBidQty += (int) bid[1];
             totalBidVal += bid[0] * bid[1];
         }
-        totalSupply = Math.max(1, totalBidQty);
+        totalSupply = Math.max(1, worldSupply + totalBidQty);
 
-        // 3. Allocate prompts
+        // 4. Allocate prompts to agents
         if (bids.isEmpty()) {
-            // Default: split evenly
             int perAgent = currentDemand / Math.max(1, agentEconomies.size());
             for (AgentEconomy econ : agentEconomies.values()) {
                 econ.setAllocatedPrompts(perAgent);
@@ -66,11 +94,9 @@ public final class EconomyEngine {
                 econ.setAllocatedPrompts(allocated);
                 econ.setPromptsServed(served);
                 econ.earn(served * promptPrice);
-                // 10% bid cost — force spend even if wallet is low (bid is a commitment)
                 econ.forceSpend(bidPrice * bidQty * 0.1);
             }
 
-            // Agents who didn't bid get nothing this tick
             for (Map.Entry<String, AgentEconomy> e : agentEconomies.entrySet()) {
                 if (!bids.containsKey(e.getKey())) {
                     e.getValue().setAllocatedPrompts(0);
@@ -79,7 +105,22 @@ public final class EconomyEngine {
             }
         }
 
-        // 4. Update price
+        // 5. Update price
+        double ratio      = (double) currentDemand / Math.max(1, totalSupply);
+        double priceShift = (ratio - 1.0) * 0.05 + rng.nextGaussian() * 0.01;
+        promptPrice       = Math.max(0.01, promptPrice * (1.0 + priceShift));
+
+        openOrders = bids.size();
+        bids.clear();
+    }
+
+    /** Legacy tick with no world data — used as fallback. */
+    public void tick() {
+        int baseDemand = (int) (TOTAL_PROMPT_VALUE / Math.max(0.01, promptPrice));
+        int noise      = rng.nextInt(Math.max(1, baseDemand / 5)) - baseDemand / 10;
+        currentDemand  = Math.max(10, baseDemand + noise);
+        totalSupply    = Math.max(1, EconomyConfig.TOTAL_PROMPT_SUPPLY);
+
         double ratio      = (double) currentDemand / Math.max(1, totalSupply);
         double priceShift = (ratio - 1.0) * 0.05 + rng.nextGaussian() * 0.01;
         promptPrice       = Math.max(0.01, promptPrice * (1.0 + priceShift));

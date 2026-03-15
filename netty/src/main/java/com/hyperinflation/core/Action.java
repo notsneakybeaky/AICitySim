@@ -14,6 +14,7 @@ public final class Action {
         FORM_ALLIANCE, BREAK_ALLIANCE,
         ATTACK_CITY, DEFEND_CITY,
         INFILTRATE, SPREAD_PROPAGANDA,
+        MOVE_TO,
         NO_OP
     }
 

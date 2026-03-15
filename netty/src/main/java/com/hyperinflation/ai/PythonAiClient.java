@@ -40,7 +40,9 @@ public final class PythonAiClient {
             World world,
             EconomyEngine economy,
             List<Agent> allAgents,
-            int tick) {
+            int tick,
+            String agentCurrentCity,
+            Map<String, String> allLocations) {
 
         Map<String, Object> body = new LinkedHashMap<>();
 
@@ -59,6 +61,10 @@ public final class PythonAiClient {
         body.put("prompts_served",    agentEcon.getPromptsServed());
         body.put("in_debt",           agentEcon.isInDebt());
 
+        // Location
+        body.put("current_city", agentCurrentCity != null ? agentCurrentCity : "unknown");
+        body.put("all_agent_locations", allLocations);
+
         // Memory
         body.put("memory_summary", agent.getMemory().buildTacticalSummary());
 
@@ -71,9 +77,10 @@ public final class PythonAiClient {
         for (Agent other : allAgents) {
             if (other.getId().equals(agent.getId())) continue;
             Map<String, Object> info = new LinkedHashMap<>();
-            info.put("id",    other.getId());
-            info.put("name",  other.getPersonality().name);
-            info.put("alive", other.isAlive());
+            info.put("id",       other.getId());
+            info.put("name",     other.getPersonality().name);
+            info.put("alive",    other.isAlive());
+            info.put("location", allLocations.getOrDefault(other.getId(), "unknown"));
             AgentEconomy otherEcon = economy.getAgentEconomy(other.getId());
             if (otherEcon != null) {
                 info.put("wallet",            otherEcon.getWallet());
@@ -116,9 +123,9 @@ public final class PythonAiClient {
                 if (pNode.isObject()) {
                     pNode.fieldNames().forEachRemaining(field -> {
                         JsonNode val = pNode.path(field);
-                        if (val.isNumber())       params.put(field, val.asDouble());
-                        else if (val.isTextual())  params.put(field, val.asText());
-                        else if (val.isBoolean())  params.put(field, val.asBoolean());
+                        if (val.isNumber())      params.put(field, val.asDouble());
+                        else if (val.isTextual()) params.put(field, val.asText());
+                        else if (val.isBoolean()) params.put(field, val.asBoolean());
                     });
                 }
 

@@ -52,4 +52,27 @@ public final class World {
         m.put("cities", citiesMap);
         return m;
     }
+
+    public double getTotalEconomicOutput() {
+        return cities.values().stream().mapToDouble(City::getEconomicOutput).sum();
+    }
+
+    public double getTotalSupplyContribution() {
+        return cities.values().stream().mapToDouble(City::getSupplyContribution).sum();
+    }
+
+    public double getAverageDemandMultiplier() {
+        return cities.values().stream()
+                .mapToDouble(City::getDemandMultiplier)
+                .average()
+                .orElse(1.0);
+    }
+
+    public double getDistance(String fromId, String toId) {
+        if (fromId == null || toId == null || fromId.equals(toId)) return 0;
+        City from = cities.get(fromId);
+        City to   = cities.get(toId);
+        if (from == null || to == null) return 0;
+        return from.distanceTo(to);
+    }
 }
