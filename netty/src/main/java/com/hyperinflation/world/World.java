@@ -14,44 +14,11 @@ public final class World {
         cities.put("vault",    new City("vault",    "The Vault",   "gamma",  3,  3, 150_000, 60, 90, 0.20));
     }
 
-    public City              getCity(String id)  { return cities.get(id); }
-    public Map<String, City> getCities()         { return Collections.unmodifiableMap(cities); }
-    public Collection<City>  allCities()         { return cities.values(); }
+    public City              getCity(String id) { return cities.get(id); }
+    public Map<String, City> getCities()        { return Collections.unmodifiableMap(cities); }
+    public Collection<City>  allCities()        { return cities.values(); }
 
-    public void tickAll() {
-        for (City c : cities.values()) c.tick();
-    }
-
-    /** Full serialization — all city data. */
-    public Map<String, Object> toFullMap() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        Map<String, Object> citiesMap = new LinkedHashMap<>();
-        for (Map.Entry<String, City> e : cities.entrySet()) {
-            citiesMap.put(e.getKey(), e.getValue().toMap());
-        }
-        m.put("cities", citiesMap);
-        return m;
-    }
-
-    /**
-     * Lightweight summary — just city names, populations, and happiness.
-     * Used for phase-change broadcasts where full data would be too large.
-     */
-    public Map<String, Object> toSummaryMap() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        Map<String, Object> citiesMap = new LinkedHashMap<>();
-        for (Map.Entry<String, City> e : cities.entrySet()) {
-            City c = e.getValue();
-            Map<String, Object> summary = new LinkedHashMap<>();
-            summary.put("name",        c.getName());
-            summary.put("population",  c.getPopulation());
-            summary.put("happiness",   Math.round(c.getHappiness() * 100.0) / 100.0);
-            summary.put("treasury",    Math.round(c.getTreasury() * 100.0) / 100.0);
-            citiesMap.put(e.getKey(), summary);
-        }
-        m.put("cities", citiesMap);
-        return m;
-    }
+    public void tickAll() { for (City c : cities.values()) c.tick(); }
 
     public double getTotalEconomicOutput() {
         return cities.values().stream().mapToDouble(City::getEconomicOutput).sum();
@@ -74,5 +41,34 @@ public final class World {
         City to   = cities.get(toId);
         if (from == null || to == null) return 0;
         return from.distanceTo(to);
+    }
+
+    public Map<String, Object> toFullMap() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        Map<String, Object> citiesMap = new LinkedHashMap<>();
+        for (Map.Entry<String, City> e : cities.entrySet()) {
+            citiesMap.put(e.getKey(), e.getValue().toMap());
+        }
+        m.put("cities",               citiesMap);
+        m.put("total_gdp",            Math.round(getTotalEconomicOutput() * 100.0) / 100.0);
+        m.put("total_supply_capacity", Math.round(getTotalSupplyContribution() * 100.0) / 100.0);
+        m.put("avg_demand_multiplier", Math.round(getAverageDemandMultiplier() * 100.0) / 100.0);
+        return m;
+    }
+
+    public Map<String, Object> toSummaryMap() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        Map<String, Object> citiesMap = new LinkedHashMap<>();
+        for (Map.Entry<String, City> e : cities.entrySet()) {
+            City c = e.getValue();
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("name",       c.getName());
+            summary.put("population", c.getPopulation());
+            summary.put("happiness",  Math.round(c.getHappiness() * 100.0) / 100.0);
+            summary.put("treasury",   Math.round(c.getTreasury() * 100.0) / 100.0);
+            citiesMap.put(e.getKey(), summary);
+        }
+        m.put("cities", citiesMap);
+        return m;
     }
 }

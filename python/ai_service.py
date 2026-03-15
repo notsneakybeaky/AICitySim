@@ -41,7 +41,6 @@ VALID_CITY_IDS = {"nexus", "ironhold", "freeport", "eden", "vault"}
 
 VALID_AGENT_IDS = {
     "agent-0", "agent-1", "agent-2", "agent-3", "agent-4",
-    "agent-5", "agent-6", "agent-7", "agent-8", "agent-9",
 }
 
 # Single source of truth for agent names and colors.
@@ -52,11 +51,11 @@ AGENT_ROSTER = {
     "agent-2": {"name": "The Diplomat",  "color": 0xFFAB47BC},
     "agent-3": {"name": "The Gambler",   "color": 0xFF66BB6A},
     "agent-4": {"name": "The Architect", "color": 0xFFFFA726},
-    "agent-5": {"name": "The Parasite",  "color": 0xFF26C6DA},
-    "agent-6": {"name": "The Zealot",    "color": 0xFFEF6C00},
-    "agent-7": {"name": "The Ghost",     "color": 0xFF78909C},
-    "agent-8": {"name": "The Banker",    "color": 0xFF9CCC65},
-    "agent-9": {"name": "The Warlord",   "color": 0xFFE53935},
+},
+    "agent-1": {"name": "The Shark",     "color": 0xFFEF5350},
+    "agent-2": {"name": "The Diplomat",  "color": 0xFFAB47BC},
+    "agent-3": {"name": "The Gambler",   "color": 0xFF66BB6A},
+    "agent-4": {"name": "The Architect", "color": 0xFFFFA726},",  "color": 0xFF26C6DA},",    "color": 0xFFEF6C00},",     "color": 0xFF78909C},",    "color": 0xFF9CCC65},",   "color": 0xFFE53935},
 }
 
 

@@ -6,6 +6,148 @@ import 'world_service.dart';
 import 'theme.dart';
 import 'world_render.dart';
 
+// =============================================================================
+//  ACTION VISUAL DEFINITION — icon + color + label for every agent action
+// =============================================================================
+
+class ActionDef {
+  final IconData icon;
+  final Color color;
+  final String label;
+  const ActionDef(this.icon, this.color, this.label);
+
+  // ---- Offensive ----
+  static final attack     = ActionDef(PhosphorIcons.lightning(PhosphorIconsStyle.fill),    Noir.rose,    'Attack');
+  static final sabotage   = ActionDef(PhosphorIcons.skull(PhosphorIconsStyle.fill),        Noir.rose,    'Sabotage');
+  static final unrest     = ActionDef(PhosphorIcons.fire(PhosphorIconsStyle.fill),         Noir.rose,    'Unrest');
+  static final damage     = ActionDef(PhosphorIcons.warning(PhosphorIconsStyle.fill),      Noir.rose,    'Damage');
+
+  // ---- Defensive / Constructive ----
+  static final defend     = ActionDef(PhosphorIcons.shieldCheck(PhosphorIconsStyle.fill),  Noir.emerald, 'Defend');
+  static final build      = ActionDef(PhosphorIcons.hammer(PhosphorIconsStyle.fill),       Noir.emerald, 'Build');
+  static final boost      = ActionDef(PhosphorIcons.rocket(PhosphorIconsStyle.fill),       Noir.emerald, 'Boost');
+  static final inject     = ActionDef(PhosphorIcons.syringe(PhosphorIconsStyle.fill),      Noir.emerald, 'Inject');
+
+  // ---- Economic ----
+  static final bid        = ActionDef(PhosphorIcons.tag(PhosphorIconsStyle.fill),          Noir.amber,   'Bid');
+  static final ask        = ActionDef(PhosphorIcons.tag(PhosphorIconsStyle.fill),          Noir.amber,   'Ask');
+  static final earn       = ActionDef(PhosphorIcons.coins(PhosphorIconsStyle.fill),        Noir.amber,   'Earn');
+  static final drain      = ActionDef(PhosphorIcons.funnel(PhosphorIconsStyle.fill),       Noir.amber,   'Drain');
+
+  // ---- Covert ----
+  static final infiltrate = ActionDef(PhosphorIcons.eye(PhosphorIconsStyle.fill),          Noir.violet,  'Infiltrate');
+  static final propaganda = ActionDef(PhosphorIcons.megaphone(PhosphorIconsStyle.fill),    Noir.violet,  'Propaganda');
+
+  // ---- Diplomatic ----
+  static final alliance   = ActionDef(PhosphorIcons.handshake(PhosphorIconsStyle.fill),    Noir.cyan,    'Alliance');
+
+  // ---- Fallback ----
+  static final unknown    = ActionDef(PhosphorIcons.question(PhosphorIconsStyle.fill),     Noir.textLow, 'Unknown');
+
+  /// All defined actions for the legend.
+  static final all = [
+    attack, sabotage, unrest, damage,
+    defend, build, boost, inject,
+    bid, earn, drain,
+    infiltrate, propaganda,
+    alliance,
+  ];
+
+  /// Resolve an event type string to its ActionDef.
+  static ActionDef fromEventType(String type) {
+    if (type.contains('ATTACK'))      return attack;
+    if (type.contains('SABOTAGE'))    return sabotage;
+    if (type.contains('UNREST'))      return unrest;
+    if (type.contains('DAMAGE'))      return damage;
+    if (type.contains('DEFEND'))      return defend;
+    if (type.contains('BUILD'))       return build;
+    if (type.contains('BOOST'))       return boost;
+    if (type.contains('INJECT'))      return inject;
+    if (type.contains('BID'))         return bid;
+    if (type.contains('ASK'))         return ask;
+    if (type.contains('EARN'))        return earn;
+    if (type.contains('DRAIN'))       return drain;
+    if (type.contains('INFILTRATE'))  return infiltrate;
+    if (type.contains('PROPAGANDA'))  return propaganda;
+    if (type.contains('ALLIANCE'))    return alliance;
+    return unknown;
+  }
+}
+
+// =============================================================================
+//  PHASE VISUAL SYSTEM
+// =============================================================================
+
+class PhaseDef {
+  final IconData icon;
+  final Color color;
+  final String description;
+  const PhaseDef(this.icon, this.color, this.description);
+
+  static PhaseDef fromPhase(String phase) {
+    switch (phase) {
+      case 'IDLE':
+        return PhaseDef(
+          PhosphorIcons.coffee(PhosphorIconsStyle.fill),
+          Noir.textLow,
+          'Idle — waiting for next tick',
+        );
+      case 'CONNECTING':
+        return PhaseDef(
+          PhosphorIcons.wifiSlash(PhosphorIconsStyle.fill),
+          Noir.amber,
+          'Connecting to simulation server...',
+        );
+      case 'DISCONNECTED':
+        return PhaseDef(
+          PhosphorIcons.wifiX(PhosphorIconsStyle.fill),
+          Noir.rose,
+          'Connection lost — attempting reconnect',
+        );
+      case 'SPECTATE':
+        return PhaseDef(
+          PhosphorIcons.eye(PhosphorIconsStyle.fill),
+          Noir.cyan,
+          'Spectating — observing live simulation',
+        );
+      case 'COLLECTING':
+        return PhaseDef(
+          PhosphorIcons.downloadSimple(PhosphorIconsStyle.fill),
+          Noir.cyan,
+          'Agents gathering intelligence and forming strategies',
+        );
+      case 'PROCESSING':
+        return PhaseDef(
+          PhosphorIcons.gearSix(PhosphorIconsStyle.fill),
+          Noir.amber,
+          'AI computing decisions and market effects',
+        );
+      case 'BROADCASTING':
+        return PhaseDef(
+          PhosphorIcons.broadcast(PhosphorIconsStyle.fill),
+          Noir.violet,
+          'Broadcasting results to all agents',
+        );
+      case 'TICK_COMPLETE':
+        return PhaseDef(
+          PhosphorIcons.checkCircle(PhosphorIconsStyle.fill),
+          Noir.emerald,
+          'Tick complete — reviewing outcomes',
+        );
+      default:
+        return PhaseDef(
+          PhosphorIcons.circleNotch(PhosphorIconsStyle.fill),
+          Noir.textLow,
+          phase,
+        );
+    }
+  }
+}
+
+// =============================================================================
+//  DASHBOARD
+// =============================================================================
+
 class WorldDashboard extends StatefulWidget {
   const WorldDashboard({super.key});
 
@@ -25,6 +167,9 @@ class _WorldDashboardState extends State<WorldDashboard> {
   List<EventEntry> _events = [];
   List<double> _priceHistory = [];
   bool _connected = false;
+
+  // Track recent actions per agent (persists across ticks)
+  final Map<String, List<EventEntry>> _agentHistory = {};
 
   @override
   void initState() {
@@ -49,8 +194,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
         case S2C.handshakeAck:
           _clientId = pkt.data['client_id'];
           _tick = pkt.data['current_tick'] ?? 0;
-          _activeModules =
-          List<String>.from(pkt.data['active_modules'] ?? []);
+          _activeModules = List<String>.from(pkt.data['active_modules'] ?? []);
           _phase = pkt.data['state'] ?? 'SPECTATE';
           _connected = true;
 
@@ -72,14 +216,14 @@ class _WorldDashboardState extends State<WorldDashboard> {
             _economy = EconomyState.fromJson(pkt.data['economy']);
             _priceHistory.add(_economy.promptPrice);
             if (_priceHistory.length > 100) {
-              _priceHistory =
-                  _priceHistory.sublist(_priceHistory.length - 100);
+              _priceHistory = _priceHistory.sublist(_priceHistory.length - 100);
             }
           }
           final rawEvents = pkt.data['events'] as List<dynamic>? ?? [];
           _events = rawEvents
               .map((e) => EventEntry.fromJson(e as Map<String, dynamic>))
               .toList();
+          _recordAgentHistory(_events);
           _phase = 'TICK_COMPLETE';
 
         case S2C.cityUpdate:
@@ -97,8 +241,21 @@ class _WorldDashboardState extends State<WorldDashboard> {
           _events = rawEvts
               .map((e) => EventEntry.fromJson(e as Map<String, dynamic>))
               .toList();
+          _recordAgentHistory(_events);
       }
     });
+  }
+
+  void _recordAgentHistory(List<EventEntry> events) {
+    for (final evt in events) {
+      if (evt.agent == null) continue;
+      _agentHistory.putIfAbsent(evt.agent!, () => []).add(evt);
+      // Keep last 15 events per agent
+      final list = _agentHistory[evt.agent!]!;
+      if (list.length > 15) {
+        _agentHistory[evt.agent!] = list.sublist(list.length - 15);
+      }
+    }
   }
 
   void _parseCities(Map<String, dynamic>? worldData) {
@@ -111,8 +268,12 @@ class _WorldDashboardState extends State<WorldDashboard> {
     });
   }
 
+  List<EventEntry> _eventsForAgent(String agentId) {
+    return _agentHistory[agentId] ?? [];
+  }
+
   // ==================================================================
-  //  BUILD — new 3-zone layout: render + cities | side panel
+  //  BUILD
   // ==================================================================
 
   @override
@@ -126,12 +287,10 @@ class _WorldDashboardState extends State<WorldDashboard> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // LEFT COLUMN: Render on top, cities on bottom
                 Expanded(
                   flex: 3,
                   child: Column(
                     children: [
-                      // World render area
                       Expanded(
                         flex: 5,
                         child: WorldRenderPanel(
@@ -141,19 +300,11 @@ class _WorldDashboardState extends State<WorldDashboard> {
                           phase: _phase,
                         ),
                       ),
-                      // City cards
-                      Expanded(
-                        flex: 4,
-                        child: _buildCityPanel(),
-                      ),
+                      Expanded(flex: 4, child: _buildCityPanel()),
                     ],
                   ),
                 ),
-                Container(
-                  width: 1,
-                  color: Noir.textMute.withOpacity(0.2),
-                ),
-                // RIGHT COLUMN: Economy + agents + events
+                Container(width: 1, color: Noir.textMute.withOpacity(0.2)),
                 Expanded(flex: 2, child: _buildSidePanel()),
               ],
             ),
@@ -168,44 +319,42 @@ class _WorldDashboardState extends State<WorldDashboard> {
   // ==================================================================
 
   Widget _buildHeader() {
+    final pDef = PhaseDef.fromPhase(_phase);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
       decoration: BoxDecoration(
         color: Noir.surface.withOpacity(0.6),
         border: Border(
-          bottom: BorderSide(color: _phaseColor().withOpacity(0.4), width: 1),
+          bottom: BorderSide(color: pDef.color.withOpacity(0.4), width: 1),
         ),
       ),
       child: Row(
         children: [
+          // Logo
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
             decoration: BoxDecoration(
               gradient: Noir.primaryGrad,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Text(
-              'H',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900),
-            ),
+            child: const Text('H',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900)),
           ),
           const SizedBox(width: 14),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'HYPERINFLATION',
-                style: TextStyle(
-                  color: Noir.textHigh,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 3,
-                ),
-              ),
+              const Text('HYPERINFLATION',
+                  style: TextStyle(
+                      color: Noir.textHigh,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 3)),
               const SizedBox(height: 2),
               Row(
                 children: [
@@ -214,7 +363,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
                   const SizedBox(width: 6),
                   Text(
                     _connected
-                        ? '${_clientId ?? 'connected'}'
+                        ? (_clientId ?? 'connected')
                         : 'disconnected',
                     style: TextStyle(
                         color: _connected ? Noir.textLow : Noir.rose,
@@ -225,13 +374,11 @@ class _WorldDashboardState extends State<WorldDashboard> {
             ],
           ),
           const Spacer(),
-          _phasePill(),
+          // Phase pill with icon
+          _phasePill(pDef),
           const SizedBox(width: 24),
           _headerMetric(
-            PhosphorIcons.timer(PhosphorIconsStyle.bold),
-            'TICK',
-            '$_tick',
-          ),
+              PhosphorIcons.timer(PhosphorIconsStyle.bold), 'TICK', '$_tick'),
           const SizedBox(width: 20),
           _headerMetric(
             PhosphorIcons.currencyDollar(PhosphorIconsStyle.bold),
@@ -241,44 +388,37 @@ class _WorldDashboardState extends State<WorldDashboard> {
             large: true,
           ),
           const SizedBox(width: 20),
-          _headerMetric(
-            PhosphorIcons.trendUp(PhosphorIconsStyle.bold),
-            'DEMAND',
-            '${_economy.currentDemand}',
-            valueColor: Noir.cyan,
-          ),
+          _headerMetric(PhosphorIcons.trendUp(PhosphorIconsStyle.bold),
+              'DEMAND', '${_economy.currentDemand}',
+              valueColor: Noir.cyan),
           const SizedBox(width: 20),
-          _headerMetric(
-            PhosphorIcons.package(PhosphorIconsStyle.bold),
-            'SUPPLY',
-            '${_economy.totalSupply}',
-          ),
+          _headerMetric(PhosphorIcons.package(PhosphorIconsStyle.bold),
+              'SUPPLY', '${_economy.totalSupply}'),
         ],
       ),
     );
   }
 
-  Widget _phasePill() {
-    final color = _phaseColor();
+  Widget _phasePill(PhaseDef pDef) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: pDef.color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3), width: 1),
+        border: Border.all(color: pDef.color.withOpacity(0.3), width: 1),
         boxShadow: [
-          BoxShadow(color: color.withOpacity(0.1), blurRadius: 12),
+          BoxShadow(color: pDef.color.withOpacity(0.1), blurRadius: 12),
         ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          GlowDot(color: color, size: 6),
+          Icon(pDef.icon, color: pDef.color, size: 12),
           const SizedBox(width: 8),
           Text(
             _phase,
             style: TextStyle(
-              color: color,
+              color: pDef.color,
               fontWeight: FontWeight.w700,
               fontSize: 11,
               letterSpacing: 1.5,
@@ -318,25 +458,8 @@ class _WorldDashboardState extends State<WorldDashboard> {
     );
   }
 
-  Color _phaseColor() {
-    switch (_phase) {
-      case 'COLLECTING':
-        return Noir.cyan;
-      case 'PROCESSING':
-        return Noir.amber;
-      case 'BROADCASTING':
-        return Noir.violet;
-      case 'TICK_COMPLETE':
-        return Noir.emerald;
-      case 'DISCONNECTED':
-        return Noir.rose;
-      default:
-        return Noir.textLow;
-    }
-  }
-
   // ==================================================================
-  //  CITY PANEL (now below render)
+  //  CITY PANEL (horizontal cards below render)
   // ==================================================================
 
   Widget _buildCityPanel() {
@@ -362,7 +485,6 @@ class _WorldDashboardState extends State<WorldDashboard> {
 
     final cities = _cities.values.toList();
 
-    // Horizontal scrolling city cards for compact layout
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -373,20 +495,15 @@ class _WorldDashboardState extends State<WorldDashboard> {
               Icon(PhosphorIcons.buildings(PhosphorIconsStyle.fill),
                   color: Noir.textLow, size: 12),
               const SizedBox(width: 6),
-              const Text(
-                'CITIES',
-                style: TextStyle(
-                  color: Noir.textLow,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 2,
-                ),
-              ),
+              const Text('CITIES',
+                  style: TextStyle(
+                      color: Noir.textLow,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 2)),
               const SizedBox(width: 8),
-              Text(
-                '${cities.length} active',
-                style: const TextStyle(color: Noir.textMute, fontSize: 9),
-              ),
+              Text('${cities.length} active',
+                  style: const TextStyle(color: Noir.textMute, fontSize: 9)),
             ],
           ),
         ),
@@ -425,7 +542,6 @@ class _WorldDashboardState extends State<WorldDashboard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 Container(
@@ -435,30 +551,25 @@ class _WorldDashboardState extends State<WorldDashboard> {
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Icon(
-                    PhosphorIcons.buildings(PhosphorIconsStyle.fill),
-                    color: Noir.primary,
-                    size: 14,
-                  ),
+                      PhosphorIcons.buildings(PhosphorIconsStyle.fill),
+                      color: Noir.primary,
+                      size: 14),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(city.name.toUpperCase(),
+                          style: const TextStyle(
+                              color: Noir.textHigh,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                              letterSpacing: 1)),
                       Text(
-                        city.name.toUpperCase(),
-                        style: const TextStyle(
-                          color: Noir.textHigh,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                          letterSpacing: 1,
-                        ),
-                      ),
-                      Text(
-                        '${city.regionId.toUpperCase()}  •  ${_formatPop(city.population)}',
-                        style: const TextStyle(
-                            color: Noir.textLow, fontSize: 9),
-                      ),
+                          '${city.regionId.toUpperCase()}  •  ${_formatPop(city.population)}',
+                          style: const TextStyle(
+                              color: Noir.textLow, fontSize: 9)),
                     ],
                   ),
                 ),
@@ -467,10 +578,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
                       color: Noir.rose, size: 14),
               ],
             ),
-
             const SizedBox(height: 12),
-
-            // Stats
             StatBar(
                 label: 'Happiness',
                 value: city.happiness,
@@ -491,10 +599,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
                 label: 'Employment',
                 value: city.employmentRate,
                 color: _statColor(city.employmentRate)),
-
             const Spacer(),
-
-            // Bottom metrics
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
@@ -506,8 +611,8 @@ class _WorldDashboardState extends State<WorldDashboard> {
                 children: [
                   _tinyMetric('\$${city.treasury.toStringAsFixed(0)}',
                       'Treasury', Noir.amber),
-                  _tinyMetric(city.economicOutput.toStringAsFixed(2),
-                      'GDP', Noir.emerald),
+                  _tinyMetric(city.economicOutput.toStringAsFixed(2), 'GDP',
+                      Noir.emerald),
                   _tinyMetric(
                       '${(city.taxRate * 100).toStringAsFixed(0)}%',
                       'Tax',
@@ -549,7 +654,7 @@ class _WorldDashboardState extends State<WorldDashboard> {
   }
 
   // ==================================================================
-  //  SIDE PANEL (RIGHT) — unchanged logic, same as before
+  //  SIDE PANEL
   // ==================================================================
 
   Widget _buildSidePanel() {
@@ -558,6 +663,11 @@ class _WorldDashboardState extends State<WorldDashboard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ---- Current Phase Explainer ----
+          _buildPhaseCard(),
+          const SizedBox(height: 16),
+
+          // ---- Market ----
           _section('PROMPT MARKET',
               PhosphorIcons.storefront(PhosphorIconsStyle.fill)),
           const SizedBox(height: 10),
@@ -565,14 +675,11 @@ class _WorldDashboardState extends State<WorldDashboard> {
             padding: const EdgeInsets.all(14),
             child: Column(
               children: [
-                _metricRow(
-                    'Price',
+                _metricRow('Price',
                     '\$${_economy.promptPrice.toStringAsFixed(2)}',
                     Noir.emerald),
-                _metricRow(
-                    'Demand', '${_economy.currentDemand}', Noir.cyan),
-                _metricRow(
-                    'Supply', '${_economy.totalSupply}', Noir.textMed),
+                _metricRow('Demand', '${_economy.currentDemand}', Noir.cyan),
+                _metricRow('Supply', '${_economy.totalSupply}', Noir.textMed),
                 _metricRow(
                     'Market Value',
                     '\$${_economy.totalMarketValue.toStringAsFixed(0)}',
@@ -583,6 +690,8 @@ class _WorldDashboardState extends State<WorldDashboard> {
             ),
           ),
           const SizedBox(height: 16),
+
+          // ---- Price Chart ----
           if (_priceHistory.length >= 2) ...[
             _section('PRICE HISTORY',
                 PhosphorIcons.chartLineUp(PhosphorIconsStyle.fill)),
@@ -599,31 +708,43 @@ class _WorldDashboardState extends State<WorldDashboard> {
             ),
             const SizedBox(height: 16),
           ],
-          _section(
-              'AGENTS', PhosphorIcons.users(PhosphorIconsStyle.fill)),
+
+          // ---- Agents ----
+          _section('AGENTS', PhosphorIcons.users(PhosphorIconsStyle.fill)),
           const SizedBox(height: 10),
-          ..._economy.agentEconomies.entries
-              .toList()
-              .asMap()
-              .entries
-              .map((entry) {
-            final i = entry.key;
-            final id = entry.value.key;
-            final econ = entry.value.value;
-            return _buildAgentCard(id, econ)
-                .animate()
-                .fadeIn(
-                duration: 300.ms,
-                delay: Duration(milliseconds: i * 60))
-                .slideX(begin: 0.02, end: 0);
-          }),
+          if (_economy.agentEconomies.isEmpty)
+            _emptyHint('Agents appear after first tick completes.',
+                PhosphorIcons.userCircle(PhosphorIconsStyle.duotone))
+          else
+            ..._economy.agentEconomies.entries
+                .toList()
+                .asMap()
+                .entries
+                .map((entry) {
+              final i = entry.key;
+              final id = entry.value.key;
+              final econ = entry.value.value;
+              return _buildAgentCard(id, econ)
+                  .animate()
+                  .fadeIn(
+                  duration: 300.ms,
+                  delay: Duration(milliseconds: i * 60))
+                  .slideX(begin: 0.02, end: 0);
+            }),
+
           const SizedBox(height: 16),
+
+          // ---- Action Legend ----
+          _buildActionLegend(),
+          const SizedBox(height: 16),
+
+          // ---- Events ----
           _section('EVENTS • TICK $_tick',
               PhosphorIcons.lightning(PhosphorIconsStyle.fill)),
           const SizedBox(height: 10),
           if (_events.isEmpty)
-            const Text('No events yet.',
-                style: TextStyle(color: Noir.textLow, fontSize: 12))
+            _emptyHint('No events this tick.',
+                PhosphorIcons.lightning(PhosphorIconsStyle.duotone))
           else
             ..._events.asMap().entries.map((entry) {
               final i = entry.key;
@@ -639,6 +760,399 @@ class _WorldDashboardState extends State<WorldDashboard> {
       ),
     );
   }
+
+  // ==================================================================
+  //  PHASE EXPLAINER CARD
+  // ==================================================================
+
+  Widget _buildPhaseCard() {
+    final pDef = PhaseDef.fromPhase(_phase);
+
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      borderColor: pDef.color.withOpacity(0.2),
+      opacity: 0.04,
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: pDef.color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: pDef.color.withOpacity(0.25)),
+            ),
+            child: Icon(pDef.icon, color: pDef.color, size: 20),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'CURRENT PHASE',
+                      style: TextStyle(
+                          color: pDef.color,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.5),
+                    ),
+                    const Spacer(),
+                    Text('TICK $_tick',
+                        style: const TextStyle(
+                            color: Noir.textLow,
+                            fontSize: 9,
+                            fontFamily: 'JetBrains Mono')),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  pDef.description,
+                  style: const TextStyle(
+                      color: Noir.textMed,
+                      fontSize: 11,
+                      height: 1.3),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==================================================================
+  //  AGENT CARD — with action history icons
+  // ==================================================================
+
+  Widget _buildAgentCard(String id, AgentEconomy econ) {
+    final color = Noir.agent(id);
+    final name = agentNames[id] ?? id;
+    final history = _eventsForAgent(id);
+    // Take last 5 for display
+    final recentActions =
+    history.length > 5 ? history.sublist(history.length - 5) : history;
+    // Prompt usage ratio
+    final usageRatio = econ.allocatedPrompts > 0
+        ? econ.promptsServed / econ.allocatedPrompts
+        : 0.0;
+
+    return GlassCard(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      opacity: econ.inDebt ? 0.08 : 0.05,
+      borderColor: econ.inDebt ? Noir.rose.withOpacity(0.25) : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ---- Row 1: Avatar + name + wallet ----
+          Row(
+            children: [
+              // Avatar
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: color.withOpacity(0.35), width: 2),
+                ),
+                child: Center(
+                    child: Text(name[0],
+                        style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16))),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13)),
+                    Text(id,
+                        style: const TextStyle(
+                            color: Noir.textLow, fontSize: 9)),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('\$${econ.wallet.toStringAsFixed(1)}',
+                      style: TextStyle(
+                          color: econ.inDebt ? Noir.rose : Noir.emerald,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          fontFamily: 'JetBrains Mono')),
+                  if (econ.inDebt)
+                    Container(
+                      margin: const EdgeInsets.only(top: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Noir.rose.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text('DEBT',
+                          style: TextStyle(
+                              color: Noir.rose,
+                              fontSize: 8,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1)),
+                    ),
+                ],
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          // ---- Row 2: Recent action chips ----
+          if (recentActions.isNotEmpty)
+            Wrap(
+              spacing: 5,
+              runSpacing: 4,
+              children:
+              recentActions.map((evt) => _buildActionChip(evt)).toList(),
+            )
+          else
+            Row(
+              children: [
+                Icon(
+                  PhaseDef.fromPhase(_phase).icon,
+                  color: Noir.textLow,
+                  size: 12,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _agentIdleText(),
+                  style:
+                  const TextStyle(color: Noir.textLow, fontSize: 10),
+                ),
+              ],
+            ),
+
+          const SizedBox(height: 10),
+
+          // ---- Row 3: Prompts bar ----
+          Row(
+            children: [
+              Icon(PhosphorIcons.chatCircle(PhosphorIconsStyle.fill),
+                  color: Noir.textLow, size: 11),
+              const SizedBox(width: 6),
+              Text(
+                'Alloc: ${econ.allocatedPrompts}  •  Served: ${econ.promptsServed}',
+                style: const TextStyle(color: Noir.textLow, fontSize: 10),
+              ),
+              const Spacer(),
+              Text(
+                '${(usageRatio * 100).toStringAsFixed(0)}%',
+                style: TextStyle(
+                  color: usageRatio > 0.8
+                      ? Noir.emerald
+                      : usageRatio > 0.4
+                      ? Noir.amber
+                      : Noir.textLow,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'JetBrains Mono',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // Usage bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: usageRatio.clamp(0.0, 1.0),
+              backgroundColor: Noir.surface,
+              valueColor: AlwaysStoppedAnimation(
+                usageRatio > 0.8
+                    ? Noir.emerald
+                    : usageRatio > 0.4
+                    ? Noir.amber
+                    : Noir.textLow,
+              ),
+              minHeight: 4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _agentIdleText() {
+    switch (_phase) {
+      case 'COLLECTING':
+        return 'Gathering intelligence...';
+      case 'PROCESSING':
+        return 'Computing strategy...';
+      case 'BROADCASTING':
+        return 'Awaiting broadcast...';
+      case 'TICK_COMPLETE':
+        return 'Reviewing outcomes';
+      default:
+        return 'Standing by';
+    }
+  }
+
+  // ==================================================================
+  //  ACTION CHIP — small icon+label for one event
+  // ==================================================================
+
+  Widget _buildActionChip(EventEntry evt) {
+    final def = ActionDef.fromEventType(evt.type);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: def.color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: def.color.withOpacity(0.2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(def.icon, color: def.color, size: 10),
+          const SizedBox(width: 4),
+          Text(
+            def.label,
+            style: TextStyle(
+                color: def.color,
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5),
+          ),
+          if (evt.target != null) ...[
+            const SizedBox(width: 3),
+            Text(
+              '→ ${evt.target}',
+              style: TextStyle(
+                  color: def.color.withOpacity(0.6), fontSize: 8),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ==================================================================
+  //  ACTION LEGEND
+  // ==================================================================
+
+  Widget _buildActionLegend() {
+    return GlassCard(
+      padding: const EdgeInsets.all(12),
+      opacity: 0.03,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(PhosphorIcons.info(PhosphorIconsStyle.fill),
+                  color: Noir.textLow, size: 11),
+              const SizedBox(width: 6),
+              const Text('ACTION LEGEND',
+                  style: TextStyle(
+                      color: Noir.textLow,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 2)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 5,
+            children: ActionDef.all.map((def) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(def.icon, color: def.color, size: 10),
+                  const SizedBox(width: 3),
+                  Text(def.label,
+                      style: TextStyle(
+                          color: def.color.withOpacity(0.7), fontSize: 9)),
+                  const SizedBox(width: 4),
+                ],
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==================================================================
+  //  EVENT TILE — now with action icon
+  // ==================================================================
+
+  Widget _buildEventTile(EventEntry evt) {
+    final def = ActionDef.fromEventType(evt.type);
+    final agentColor =
+    evt.agent != null ? Noir.agent(evt.agent!) : Noir.textLow;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: def.color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(6),
+        border: Border(left: BorderSide(color: def.color, width: 3)),
+      ),
+      child: Row(
+        children: [
+          // Action icon
+          Icon(def.icon, color: def.color, size: 14),
+          const SizedBox(width: 8),
+          // Agent dot
+          if (evt.agent != null) ...[
+            Container(
+                width: 6,
+                height: 6,
+                decoration:
+                BoxDecoration(color: agentColor, shape: BoxShape.circle)),
+            const SizedBox(width: 6),
+          ],
+          // Description
+          Expanded(
+            child: Text(evt.description,
+                style: const TextStyle(color: Noir.textMed, fontSize: 11),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(width: 8),
+          // Type badge
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: def.color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(def.label.toUpperCase(),
+                style: TextStyle(
+                    color: def.color,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==================================================================
+  //  SHARED HELPERS
+  // ==================================================================
 
   Widget _section(String title, IconData icon) {
     return Row(
@@ -674,153 +1188,23 @@ class _WorldDashboardState extends State<WorldDashboard> {
     );
   }
 
-  Widget _buildAgentCard(String id, AgentEconomy econ) {
-    final color = Noir.agent(id);
-    final name = agentNames[id] ?? id;
-
-    return GlassCard(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      opacity: econ.inDebt ? 0.08 : 0.05,
-      borderColor: econ.inDebt ? Noir.rose.withOpacity(0.25) : null,
+  Widget _emptyHint(String text, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: Row(
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: color.withOpacity(0.3)),
-            ),
-            child: Center(
-                child: Text(name[0],
-                    style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16))),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name,
-                    style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12)),
-                const SizedBox(height: 2),
-                Text(
-                  'Alloc: ${econ.allocatedPrompts}  •  Served: ${econ.promptsServed}',
-                  style: const TextStyle(color: Noir.textLow, fontSize: 10),
-                ),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text('\$${econ.wallet.toStringAsFixed(1)}',
-                  style: TextStyle(
-                      color: econ.inDebt ? Noir.rose : Noir.emerald,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
-                      fontFamily: 'JetBrains Mono')),
-              if (econ.inDebt)
-                Container(
-                  margin: const EdgeInsets.only(top: 2),
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: Noir.rose.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text('DEBT',
-                      style: TextStyle(
-                          color: Noir.rose,
-                          fontSize: 8,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1)),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEventTile(EventEntry evt) {
-    final color = _eventColor(evt.type);
-    final agentColor =
-    evt.agent != null ? Noir.agent(evt.agent!) : Noir.textLow;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 5),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(6),
-        border: Border(left: BorderSide(color: color, width: 3)),
-      ),
-      child: Row(
-        children: [
-          if (evt.agent != null) ...[
-            Container(
-                width: 6,
-                height: 6,
-                decoration:
-                BoxDecoration(color: agentColor, shape: BoxShape.circle)),
-            const SizedBox(width: 8),
-          ],
-          Expanded(
-            child: Text(evt.description,
-                style: const TextStyle(color: Noir.textMed, fontSize: 11),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis),
-          ),
+          Icon(icon, color: Noir.textMute, size: 16),
           const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(evt.type,
-                style: TextStyle(
-                    color: color,
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.5)),
-          ),
+          Text(text,
+              style: const TextStyle(color: Noir.textLow, fontSize: 11)),
         ],
       ),
     );
-  }
-
-  Color _eventColor(String type) {
-    if (type.contains('ATTACK') || type.contains('SABOTAGE') ||
-        type.contains('UNREST')) {
-      return Noir.rose;
-    }
-    if (type.contains('BUILD') || type.contains('BOOST') ||
-        type.contains('DEFEND') || type.contains('INJECT')) {
-      return Noir.emerald;
-    }
-    if (type.contains('BID') || type.contains('DRAIN') ||
-        type.contains('EARN')) {
-      return Noir.amber;
-    }
-    if (type.contains('INFILTRATE') || type.contains('PROPAGANDA')) {
-      return Noir.violet;
-    }
-    if (type.contains('ALLIANCE')) return Noir.cyan;
-    return Noir.textLow;
   }
 }
 
 // ==================================================================
-//  PRICE CHART (extracted so render file can exist cleanly)
+//  PRICE CHART
 // ==================================================================
 
 class PriceChartPainter extends CustomPainter {
@@ -886,8 +1270,8 @@ class PriceChartPainter extends CustomPainter {
     final lastY =
         size.height - ((prices.last - minP) / range) * size.height;
     canvas.drawCircle(Offset(lastX, lastY), 3, Paint()..color = lineColor);
-    canvas.drawCircle(
-        Offset(lastX, lastY), 6, Paint()..color = lineColor.withOpacity(0.2));
+    canvas.drawCircle(Offset(lastX, lastY), 6,
+        Paint()..color = lineColor.withOpacity(0.2));
 
     final style = TextStyle(color: Noir.textLow, fontSize: 9);
     _drawText(
