@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # ---- Config ----
 load_dotenv()
@@ -15,7 +16,15 @@ if not API_KEY:
     raise RuntimeError("Set GOOGLE_GENAI_API_KEY environment variable")
 
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("models/gemini-2.5-flash")
+model = genai.GenerativeModel(
+    "models/gemini-2.5-flash",
+    safety_settings={
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+)
 
 app = FastAPI(title="Hyperinflation AI Service")
 
@@ -216,11 +225,11 @@ AVAILABLE ACTIONS:
 Valid city IDs: nexus, ironhold, freeport, eden, vault
 Valid agent IDs: {valid_agents_str}
 
-RESPONSE FORMAT: Return ONLY a JSON object with this exact structure (no extra text):
-{{"internal_thought": "your private reasoning here", "actions": [{{"type": "ACTION_NAME", "target_id": "target_here_or_null", "params": {{}}, "reasoning": "why"}}]}}
+RESPONSE FORMAT: Return ONLY a JSON object. Keep internal_thought VERY short (under 15 words). Put actions first.
+{{"actions": [{{"type": "ACTION_NAME", "target_id": "city_or_agent_id", "params": {{}}, "reasoning": "why in under 10 words"}}], "internal_thought": "brief"}}
 
 Example valid response:
-{{"internal_thought": "I should build up my city", "actions": [{{"type": "BUILD_INFRASTRUCTURE", "target_id": "nexus", "params": {{"amount": 10}}, "reasoning": "Strengthen my base"}}]}}"""
+{{"actions": [{{"type": "BUILD_INFRASTRUCTURE", "target_id": "nexus", "params": {{"amount": 10}}, "reasoning": "Strengthen my base"}}], "internal_thought": "Build first, profit later"}}"""
 
 
 def build_alliance_prompt(req: AllianceRequest) -> str:
@@ -250,11 +259,11 @@ RESPONSE FORMAT: Return ONLY a JSON object like this (no extra text):
 async def call_gemini_json(prompt: str, retries: int = 2) -> dict:
     """Call Gemini and extract valid JSON from the response.
 
-    Uses multiple strategies:
-    1. response_mime_type for structured output
-    2. Markdown fence stripping
-    3. Regex-based JSON extraction as fallback
-    4. Lenient parsing for trailing commas etc.
+    Strategies in order:
+    1. Strip markdown fences, direct json.loads
+    2. Fix trailing commas
+    3. Regex extract first { ... }
+    4. Repair truncated JSON (close open braces/brackets)
     """
     last_error = None
     for attempt in range(retries):
@@ -263,9 +272,8 @@ async def call_gemini_json(prompt: str, retries: int = 2) -> dict:
                 model.generate_content,
                 prompt,
                 generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json",
-                    temperature=0.7,  # lower = more reliable JSON
-                    max_output_tokens=1024,  # shorter = less chance of truncation
+                    temperature=0.7,
+                    max_output_tokens=2048,
                 ),
             )
 
@@ -280,53 +288,95 @@ async def call_gemini_json(prompt: str, retries: int = 2) -> dict:
                 text = text[:-3]
             text = text.strip()
 
-            # Try direct parse first
+            # Try direct parse
             try:
                 return json.loads(text)
             except json.JSONDecodeError:
                 pass
 
-            # Fix common Gemini JSON issues:
-            # - Trailing commas before } or ]
+            # Fix trailing commas
             cleaned = re.sub(r',\s*([}\]])', r'\1', text)
-            # - Single quotes instead of double
-            # (only if no double quotes present — crude but helps)
-            if '"' not in cleaned and "'" in cleaned:
-                cleaned = cleaned.replace("'", '"')
             try:
                 return json.loads(cleaned)
             except json.JSONDecodeError:
                 pass
 
-            # Last resort: extract the first JSON object from the text
-            match = re.search(r'\{[\s\S]*\}', text)
+            # Regex: extract first { ... }
+            match = re.search(r'\{[\s\S]*\}', cleaned)
             if match:
-                candidate = match.group(0)
-                candidate = re.sub(r',\s*([}\]])', r'\1', candidate)
                 try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError as e:
-                    last_error = e
-                    print(f"[AI] Attempt {attempt + 1} JSON extraction failed: {e}")
-                    print(f"[AI] Raw text (first 300 chars): {text[:300]}")
-            else:
-                last_error = ValueError("No JSON object found in response")
-                print(f"[AI] Attempt {attempt + 1}: no JSON object in response")
-                print(f"[AI] Raw text (first 300 chars): {text[:300]}")
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    pass
+
+            # TRUNCATION REPAIR: text starts with { but has no closing }
+            # Gemini ran out of tokens mid-JSON. Try to close it.
+            if text.lstrip().startswith('{'):
+                repaired = _repair_truncated_json(text)
+                if repaired is not None:
+                    print(f"[AI] Attempt {attempt + 1}: repaired truncated JSON")
+                    return repaired
+
+            last_error = ValueError("Could not parse response")
+            print(f"[AI] Attempt {attempt + 1}: JSON parse failed")
+            print(f"[AI] Raw text (first 300 chars): {text[:300]}")
 
         except Exception as e:
             last_error = e
             print(f"[AI] Attempt {attempt + 1} failed: {e}")
 
         if attempt < retries - 1:
-            await asyncio.sleep(1.0)  # flat 1s backoff — keep total under 15s
+            await asyncio.sleep(1.0)
 
-    # All retries exhausted — return a safe fallback instead of crashing
+    # All retries exhausted — safe fallback
     print(f"[AI] All {retries} attempts failed, returning NO_OP fallback")
     return {
         "internal_thought": f"AI parse failed after {retries} attempts: {last_error}",
         "actions": [{"type": "NO_OP", "reasoning": "AI response was unparseable"}]
     }
+
+
+def _repair_truncated_json(text: str) -> dict | None:
+    """Attempt to close truncated JSON by brute-force appending brackets.
+
+    Gemini often truncates mid-string like:
+      {"internal_thought": "blah blah blah...
+    We try closing the string and all open containers.
+    """
+    # Common truncation suffixes to try, most specific first
+    suffixes = [
+        '"}]}',          # truncated inside reasoning string
+        '"}]}}',
+        '": ""}]}',      # truncated inside a key
+        '"}]}',
+        '"]}}',
+        '"}}',
+        '"}',
+        ']}',
+        '}',
+        '": 5}]}',       # truncated inside params
+        ': 5}]}',
+        '", "reasoning": "truncated"}]}',
+    ]
+
+    # Also try: if we can find "actions" already, just close it
+    text_clean = re.sub(r',\s*([}\]])', r'\1', text)
+
+    for suffix in suffixes:
+        candidate = text_clean + suffix
+        try:
+            result = json.loads(candidate)
+            # Validate it has the structure we need
+            if isinstance(result, dict) and "actions" in result:
+                return result
+            if isinstance(result, dict) and "internal_thought" in result:
+                # Has thought but no actions — add default
+                result.setdefault("actions", [{"type": "NO_OP", "reasoning": "truncated response"}])
+                return result
+        except json.JSONDecodeError:
+            continue
+
+    return None
 
 
 # =============================================================================
