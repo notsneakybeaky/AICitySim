@@ -42,7 +42,7 @@ public final class WorldEngine {
     private volatile String lastNarration = "";
 
     // ---- Debate system ----
-    private static final int MAX_TICKS = 25;
+    private static final int MAX_TICKS = 50;
     private final Map<String, List<Double>> walletHistory = new LinkedHashMap<>();
     private final Map<String, Map<String, Integer>> actionCounts = new LinkedHashMap<>();
 
