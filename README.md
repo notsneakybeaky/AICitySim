@@ -5,6 +5,8 @@
   <img src="https://img.shields.io/badge/AI-Gemini%202.5%20Flash-orange?style=flat-square" alt="Gemini"/>
 </p>
 
+Completely vibe coded in 24 hours.
+
 # Hyperinflation: AI Economic Warfare Simulation
 
 **5 AI personalities. 5 cities. 1 dying economy. They compete, they strategize, they debate who won.**
